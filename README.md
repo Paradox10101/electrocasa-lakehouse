@@ -31,7 +31,7 @@ Los datos, las sucursales y las personas del caso son ficticios.
 
 | | |
 |---|---|
-| **Fuentes** | 6, con tres métodos de ingesta: Auto Loader, COPY INTO y el conector de Lakeflow Connect |
+| **Fuentes** | Las 6 del enunciado más la tabla de referencia de sucursales, con tres métodos de ingesta: Auto Loader, COPY INTO y el conector de Lakeflow Connect |
 | **Tablas** | 7 en Bronze, 11 en Silver y 9 en Gold |
 | **Calidad** | 36 reglas declaradas en `src/electrocasa/utils/reglas.py` (24 descartan y 12 advierten); 902 registros en `silver.cuarentena`, cada uno con su fuente y su regla |
 | **Ventas** | 18.000 distintas, 17.488 válidas y 512 rechazadas, sin duplicados después de reingestar los tres lotes |
