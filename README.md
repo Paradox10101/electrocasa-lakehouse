@@ -314,10 +314,9 @@ El workspace es de tipo serverless: los catálogos usan el almacenamiento por de
 
 1. Crear los grupos `electrocasa_ingenieria`, `electrocasa_analistas` y `electrocasa_auditoria` en **Settings > Identity and access > Groups**, y agregarse a `electrocasa_ingenieria`.
 2. Crear la Connection de Unity Catalog de tipo SQL Server `electrocasa_tracking_sqlserver` con el host, el usuario y la contraseña que comparte el docente. Si el asistente pide un catálogo foráneo, llamarlo `electrocasa_sqlserver`.
-3. Crear el catálogo `electrocasa_dev` con los schemas `bronze`, `silver` y `gold`, y el volume `default.vol_landing`. También se puede con el CLI:
+3. Crear el catálogo `electrocasa_dev` en Catalog Explorer (**Create catalog**, almacenamiento **Default storage**). El CLI no lo crea en este caso, porque la API pide una ubicación de almacenamiento y el almacenamiento por defecto solo se elige desde la interfaz. Los schemas y el volume sí van por el CLI:
 
    ```powershell
-   databricks catalogs create electrocasa_dev
    foreach ($s in "bronze", "silver", "gold") { databricks schemas create $s electrocasa_dev }
    databricks volumes create electrocasa_dev default vol_landing MANAGED
    ```
@@ -346,7 +345,7 @@ databricks bundle run -t dev electrocasa_setup
 4. **Cierre:**
    - `databricks bundle run -t dev electrocasa_tracking` hace la segunda corrida del conector, que no tiene que traer filas;
    - `databricks bundle run -t dev electrocasa_monitoreo` saca el event log, la historia del conector, los conteos por lote y los costos.
-5. **Producción:** crear `electrocasa_prod` igual que `electrocasa_dev`, desplegar con `databricks bundle deploy -t prod` y correr `databricks bundle run -t prod electrocasa_setup`. En `prod` el trigger por llegada de archivo queda activo.
+5. **Producción:** crear `electrocasa_prod` igual que `electrocasa_dev` (catálogo en la interfaz, schemas y volume por el CLI), desplegar con `databricks bundle deploy -t prod` y correr `databricks bundle run -t prod electrocasa_setup`. En `prod` el trigger por llegada de archivo queda activo.
 
 ## 14. Evidencia de ejecución
 
