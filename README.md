@@ -4,6 +4,29 @@ Plataforma de datos de punta a punta sobre Azure Databricks para ElectroCasa, un
 
 Los datos, las sucursales y las personas del caso son ficticios.
 
+## Cómo revisar este repositorio
+
+Cada pauta del enunciado y dónde se cumple:
+
+| Pauta del enunciado | Dónde está |
+|---|---|
+| Repositorio con `databricks.yml`, `resources/`, `src/`, `contratos/`, `notebooks/00_setup.ipynb` y README | Raíz del repositorio ([sección 3](#3-estructura-del-repositorio)) |
+| Catálogo propio, schemas por capa y volume de landing | `notebooks/00_setup.ipynb` ([sección 9](#9-gobierno-y-seguridad)) |
+| Al menos dos métodos de ingesta de archivos, justificados | Auto Loader en `src/electrocasa/transformations/bronze.py` (por metadata, con `src/electrocasa/config/fuentes_auto_loader.json`) y COPY INTO en `notebooks/01_carga_copy_into.ipynb` ([sección 4](#4-ingesta-método-por-fuente)) |
+| Tracking con el conector query-based de SQL Server, cursor `fecha_modificacion` y llave `evento_id` | `resources/electrocasa_tracking.yml` ([sección 4](#4-ingesta-método-por-fuente)); dos corridas en la [sección 14.2](#142-las-dos-corridas-del-conector) |
+| Contrato de datos por fuente, alineado con el código | `contratos/` y `src/electrocasa/utils/reglas.py` |
+| Expectativas con política justificada y rechazos consultables | `src/electrocasa/utils/reglas.py`, `transformations/silver_*.py` y `silver.cuarentena` ([sección 5](#5-calidad-expectativas-políticas-y-cuarentena)) |
+| Empleados en SCD Type 2 con `sequence_by` de la fuente | `src/electrocasa/transformations/silver_empleados.py` ([sección 6](#6-historia-de-empleados-scd-type-2)) |
+| Normalización de fechas, montos, categorías, métodos de pago, eventos, estados, couriers y ciudad | `src/electrocasa/utils/normalizacion.py` y `preparacion.py` |
+| Gold que responde las seis preguntas | `src/electrocasa/transformations/gold.py` y `utils/gold_logica.py` ([sección 8](#8-gold-una-tabla-por-pregunta)) |
+| Job con dependencias, dos tipos de tarea, validación, trigger, reintentos y alertas | `resources/electrocasa_job.yml` y `notebooks/02_validacion.ipynb` ([sección 10](#10-orquestación)) |
+| Bundle con dos targets | `databricks.yml` ([sección 11](#11-cicd-con-el-bundle)) |
+| Monitoreo y justificación del compute | `notebooks/90_monitoreo.ipynb` ([sección 12](#12-monitoreo-compute-y-costos)) |
+| Grupos, `GRANT`, `REVOKE`, acceso de auditoría y masking de `dni` y `salario` | `notebooks/00_setup.ipynb` y `src/electrocasa/utils/mascaras.py` ([sección 9](#9-gobierno-y-seguridad)) |
+| Decisiones justificadas | [Sección 7](#7-decisiones-de-diseño) |
+| Evidencia de ejecución | [Sección 14](#14-evidencia-de-ejecución) |
+| Retos opcionales | [Sección 15](#15-retos-opcionales) |
+
 ## Contenido
 
 1. [Caso y preguntas de negocio](#1-caso-y-preguntas-de-negocio)
@@ -95,10 +118,6 @@ electrocasa-lakehouse/
 │   ├── 02_validacion.ipynb            tarea del job: conteos, rechazos y falla si Gold queda vacía
 │   ├── 90_monitoreo.ipynb             event log, system.lakeflow y system.billing
 │   └── 91_reprocesar_cuarentena.ipynb reproceso de registros rechazados
-├── scripts/
-│   ├── levantar.ps1                   crea el workspace serverless y despliega y corre todo, por pasos reanudables
-│   ├── bajar.ps1                      borra bundle, catálogos, Connection, workspace y grupo de recursos
-│   └── subir_lote.ps1                 sube al volume los archivos de un lote (1, 2 o 3)
 ├── tests/test_normalizacion.py        pruebas locales de la normalización con PySpark
 └── README.md
 ```
@@ -289,47 +308,45 @@ flowchart LR
 
 ## 13. Despliegue paso a paso
 
-El workspace es de tipo serverless (en uno serverless los catálogos usan el almacenamiento por defecto y no hay VMs que administrar).
+El workspace es de tipo serverless: los catálogos usan el almacenamiento por defecto y no hay clusters que administrar.
 
-**Automático:** `scripts/levantar.ps1` hace todo esto en nueve pasos, con el CLI de Azure y el de Databricks.
-Crea el grupo de recursos y el workspace serverless, pide los datos de la Connection sin guardarlos, crea los
-catálogos, despliega, corre el setup, los tres lotes, la segunda corrida del conector, el monitoreo y el
-despliegue de `prod`. Se retoma desde un paso con `-Desde <n>`. Hace una pausa para que los grupos se creen en la
-interfaz, como pide el enunciado. `scripts/bajar.ps1` borra todo al terminar.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\levantar.ps1 -CorreoAlertas <correo> -Datos <carpeta datos>
-powershell -ExecutionPolicy Bypass -File .\scriptsajar.ps1
-```
-
-**Manual, en la interfaz:**
+**En la interfaz del workspace:**
 
 1. Crear los grupos `electrocasa_ingenieria`, `electrocasa_analistas` y `electrocasa_auditoria` en **Settings > Identity and access > Groups**, y agregarse a `electrocasa_ingenieria`.
 2. Crear la Connection de Unity Catalog de tipo SQL Server `electrocasa_tracking_sqlserver` con el host, el usuario y la contraseña que comparte el docente. Si el asistente pide un catálogo foráneo, llamarlo `electrocasa_sqlserver`.
+3. Crear el catálogo `electrocasa_dev` con los schemas `bronze`, `silver` y `gold`, y el volume `default.vol_landing`. También se puede con el CLI:
 
-**Con el CLI de Databricks (PowerShell), desde la raíz del repositorio:**
+   ```powershell
+   databricks catalogs create electrocasa_dev
+   foreach ($s in "bronze", "silver", "gold") { databricks schemas create $s electrocasa_dev }
+   databricks volumes create electrocasa_dev default vol_landing MANAGED
+   ```
+
+**Despliegue del bundle con el CLI de Databricks, desde la raíz del repositorio.** El correo de alertas y la base de Tracking se pasan como variables, para no versionarlos:
 
 ```powershell
 $env:BUNDLE_VAR_correo_alertas = "<correo>"
 $env:BUNDLE_VAR_bd_tracking    = "<base de datos de Tracking>"
 
-databricks catalogs create electrocasa_dev
-foreach ($s in "bronze", "silver", "gold") { databricks schemas create $s electrocasa_dev }
-databricks volumes create electrocasa_dev default vol_landing MANAGED
-
 databricks bundle validate -t dev
 databricks bundle deploy -t dev
 databricks bundle run -t dev electrocasa_setup
-
-powershell -ExecutionPolicy Bypass -File .\scripts\subir_lote.ps1 -Lote 1 -Datos <carpeta datos>
-databricks bundle run -t dev electrocasa_job
 ```
 
-- **Lotes 2 y 3:** se repiten con `-Lote 2` y `-Lote 3`, y después de cada uno se corre `electrocasa_job`.
-- **Cierre:**
-  - `databricks bundle run -t dev electrocasa_tracking` hace la segunda corrida del conector, que no tiene que traer filas;
-  - `databricks bundle run -t dev electrocasa_monitoreo` saca el event log, la historia del conector, los conteos por lote y los costos.
-- **Producción:** se repite la creación del catálogo con `electrocasa_prod`, más `databricks bundle deploy -t prod` y `databricks bundle run -t prod electrocasa_setup`. En `prod` el trigger por llegada de archivo queda activo.
+**Procesamiento por lotes:**
+
+1. **Lote 1:** subir a su carpeta del volume el lote 1 de ventas, empleados, devoluciones y reseñas, el catálogo del 2026-03-01 y `sucursales.csv`, desde Catalog Explorer (Upload to this volume) o con `databricks fs cp`. Después correr el job:
+
+   ```powershell
+   databricks bundle run -t dev electrocasa_job
+   ```
+
+2. **Lote 2:** los lotes 2 y el catálogo del 2026-08-01, y otra corrida del job.
+3. **Lote 3:** los lotes 3 de ventas, empleados y devoluciones, y otra corrida del job.
+4. **Cierre:**
+   - `databricks bundle run -t dev electrocasa_tracking` hace la segunda corrida del conector, que no tiene que traer filas;
+   - `databricks bundle run -t dev electrocasa_monitoreo` saca el event log, la historia del conector, los conteos por lote y los costos.
+5. **Producción:** crear `electrocasa_prod` igual que `electrocasa_dev`, desplegar con `databricks bundle deploy -t prod` y correr `databricks bundle run -t prod electrocasa_setup`. En `prod` el trigger por llegada de archivo queda activo.
 
 ## 14. Evidencia de ejecución
 
