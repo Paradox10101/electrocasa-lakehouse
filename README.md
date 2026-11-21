@@ -24,7 +24,7 @@ Cada pauta del enunciado y dónde se cumple:
 | Monitoreo y justificación del compute | `notebooks/90_monitoreo.ipynb` ([sección 12](#12-monitoreo-compute-y-costos)) |
 | Grupos, `GRANT`, `REVOKE`, acceso de auditoría y masking de `dni` y `salario` | `notebooks/00_setup.ipynb` y `src/electrocasa/utils/mascaras.py` ([sección 9](#9-gobierno-y-seguridad)) |
 | Decisiones justificadas | [Sección 7](#7-decisiones-de-diseño) |
-| Evidencia de ejecución | [Sección 14](#14-evidencia-de-ejecución) |
+| Evidencia de ejecución | [Sección 14](#14-evidencia-de-ejecución), con capturas del pipeline y del job |
 | Retos opcionales | [Sección 15](#15-retos-opcionales) |
 
 ## Contenido
@@ -350,7 +350,32 @@ databricks bundle run -t dev electrocasa_setup
 
 ## 14. Evidencia de ejecución
 
-Todo corrió el 21 de noviembre de 2026 en un workspace serverless de Azure Databricks (West US 2), con los tres lotes en orden.
+Todo corrió el 21 de noviembre de 2026 en un workspace serverless de Azure Databricks (West US 2), con los tres lotes en orden. En las capturas está tapado el nombre de usuario de la cuenta.
+
+**Pipeline `electrocasa_medallion_dev`:**
+
+- **Corrida:** actualización completa (Refresh all) del 21 de noviembre, de 19:26 a 19:28 UTC, hecha después de estandarizar los couriers. Todos los nodos terminaron en verde.
+- **Insignias de Silver:** en los cuadros de Silver, la gris es la cantidad de registros descartados por las expectativas y la amarilla la de registros con advertencia.
+- **Ejemplo:** `ventas` descarta 512 y advierte 68. Los 512 coinciden con las ventas rechazadas de la [sección 14.1](#141-conteos-después-de-cada-lote).
+
+![Grafo completo del pipeline, de las fuentes a Gold](docs/img/01_pipeline_grafo_completo.png)
+
+<details>
+<summary>El mismo grafo por tramos, para leer los nombres</summary>
+
+Tramo de Empleados: Auto Loader, la vista de cambios, la historia SCD Type 2 y las tablas de Gold de dotación y vendedores. Abajo, `cuarentena` con 902 registros.
+
+![Tramo de Empleados, sucursales y cuarentena](docs/img/01a_pipeline_empleados_y_cuarentena.png)
+
+Tramo de reseñas, ventas, devoluciones y tracking: Silver con sus insignias de expectativas y Gold de couriers, ventas netas y reseñas negativas.
+
+![Tramo de Silver y Gold](docs/img/01b_pipeline_silver_y_gold.png)
+
+Tramo del catálogo: los snapshots, la versión vigente y los dos top 10 de productos.
+
+![Tramo del catálogo y los top de productos](docs/img/01c_pipeline_catalogo_y_productos.png)
+
+</details>
 
 ### 14.1 Conteos después de cada lote
 
@@ -424,6 +449,8 @@ La ingesta es incremental por el cursor `fecha_modificacion`.
 | Lote 3 | 19:02:48 | 19:08:23 | SUCCESS |
 
 Cada corrida ejecutó las cuatro tareas en orden: `carga_copy_into`, `ingesta_tracking`, `pipeline_principal` y `validacion`. La validación no falló en ninguna, así que ninguna tabla de Gold quedó vacía.
+
+![Corrida del lote 3 del job, con las cuatro tareas en verde sobre compute serverless](docs/img/02_job_orquestacion.png)
 
 Despliegue de los dos targets con el CLI de Databricks:
 
