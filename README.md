@@ -33,7 +33,7 @@ Los datos, las sucursales y las personas del caso son ficticios.
 |---|---|
 | **Fuentes** | Las 6 del enunciado más la tabla de referencia de sucursales, con tres métodos de ingesta: Auto Loader, COPY INTO y el conector de Lakeflow Connect |
 | **Tablas** | 7 en Bronze, 11 en Silver y 9 en Gold |
-| **Calidad** | 36 reglas declaradas en `src/electrocasa/utils/reglas.py` (24 descartan y 12 advierten); 902 registros en `silver.cuarentena`, cada uno con su fuente y su regla |
+| **Calidad** | 37 reglas declaradas en `src/electrocasa/utils/reglas.py` (24 descartan, 1 detiene la actualización y 12 advierten); 902 registros en `silver.cuarentena`, cada uno con su fuente y su regla |
 | **Ventas** | 18.000 distintas, 17.488 válidas y 512 rechazadas, sin duplicados después de reingestar los tres lotes |
 | **Historia de Empleados** | 4.049 versiones SCD Type 2, con 63 eventos tardíos ubicados en su lugar |
 | **Tracking** | 15.139 eventos en un solo `MERGE`; las corridas siguientes del conector no duplicaron nada |
@@ -77,6 +77,18 @@ Cada pauta del enunciado y dónde se cumple:
 | Decisiones justificadas | [Sección 7](#7-decisiones-de-diseño) |
 | Evidencia de ejecución | [Sección 14](#14-evidencia-de-ejecución), con capturas del pipeline y del job |
 | Retos opcionales | [Sección 15](#15-retos-opcionales) |
+
+Justificaciones que pide el enunciado y dónde están:
+
+| Justificación | Dónde |
+|---|---|
+| Método de ingesta de cada fuente | [Sección 4](#4-ingesta-método-por-fuente) |
+| Política de violación de cada expectativa (las 37 reglas) | [Sección 5](#5-calidad-expectativas-políticas-y-cuarentena) |
+| Cómo se implementó el SCD Type 2 y de dónde sale `sequence_by` | [Sección 6](#6-historia-de-empleados-scd-type-2) |
+| Huérfanos, dni repetido, salarios fuera de rango, formato de la máscara, modo del conector y descontinuados | [Sección 7](#7-decisiones-de-diseño) |
+| Trigger del job, reintentos y alertas | [Sección 10](#10-orquestación) |
+| Compute de cada recurso | [Sección 12](#12-monitoreo-compute-y-costos) |
+| Tablas de sistema no disponibles: error y alternativa | [Sección 14.4](#144-gobierno) |
 
 ## Contenido
 
@@ -196,17 +208,51 @@ La lógica vive en `src/electrocasa/utils/` como funciones de DataFrame a DataFr
 
 ## 5. Calidad: expectativas, políticas y cuarentena
 
-| Fuente | Expectativa | Política | Por qué |
+- **Dónde están las reglas:** todas viven en `src/electrocasa/utils/reglas.py`, son 37 y las usan el pipeline y la cuarentena.
+- **El criterio para elegir la política:**
+  - **Descarte:** cuando sin ese dato el registro no se puede ubicar ni sumar en una pregunta de negocio. Va a cuarentena y el resto sigue.
+  - **Advertencia:** cuando el registro es un hecho real y sirve aunque le falte algo. Se conserva y la regla mide cuántos casos hay.
+  - **Falla:** solo para la tabla de referencia de la que dependen todas las preguntas por sucursal. Detiene la actualización.
+
+| Fuente | Regla | Política | Por qué |
 |---|---|---|---|
-| Ventas | `monto_total > 0` (después de normalizar el decimal), `cantidad > 0`, sucursal, fecha, método de pago, canal y vendedor en tienda física | Descarte | El monto y la cantidad son la base de las preguntas 1, 2 y 4. Una venta inválida distorsiona el resultado, pero no justifica detener el pipeline |
-| Ventas | Producto existente en el catálogo | Advertencia | La venta ocurrió: excluirla subestimaría las ventas |
-| Catálogo | `precio_lista` numérico y mayor a 0 | Advertencia | El precio no interviene en ninguna pregunta, y descartar el producto dejaría huérfanas sus ventas y reseñas; queda en nulo y el texto original se conserva |
-| Empleados | `id_empleado` y `fecha_evento` no nulos, tipo de evento conocido, `fecha_registro` válida, sucursal | Descarte | Sin estos datos el evento no se puede ubicar en la historia |
-| Empleados | dni presente, salario sin corregir | Advertencia | Miden calidad sin perder eventos válidos |
-| Reseñas | `calificacion` entre 1 y 5, fecha válida | Descarte | El enunciado excluye las calificaciones inválidas de la pregunta 5 |
-| Devoluciones | Venta de origen existente y `0 <= monto_reembolso <= monto_venta` | Descarte | Un reembolso imposible altera las ventas netas. La regla se evalúa sobre el join con `silver.ventas`, porque una expectativa mira una fila a la vez |
-| Tracking | Estado dentro de `pendiente`, `en_transito`, `entregado`, `devuelto` | Descarte | Un estado desconocido no se puede ubicar en el ciclo del envío |
-| Sucursales | `sucursal_id` no nulo | Falla | Es la referencia de todas las preguntas por sucursal: si llega rota, se detiene la actualización antes de publicar Gold |
+| Ventas | `venta_id_presente` | Descarte | Es la llave para deduplicar las reingestas: sin ella la venta no se puede contar una sola vez |
+| Ventas | `monto_positivo` (después de normalizar el decimal) | Descarte | El monto es la base de las preguntas 1 y 4. Una venta con monto nulo, cero o negativo distorsiona las ventas, pero no justifica detener el pipeline |
+| Ventas | `cantidad_positiva` | Descarte | Es la medida de la pregunta 2 (unidades por producto) |
+| Ventas | `sucursal_presente` | Descarte | Sin sucursal la venta no entra en la pregunta 1 |
+| Ventas | `fecha_valida` | Descarte | Sin fecha no hay mes: no entra en las preguntas 1, 2 y 4 |
+| Ventas | `metodo_pago_conocido` | Descarte | Después de estandarizar, un método fuera del conjunto cerrado indica un registro corrupto |
+| Ventas | `canal_conocido` | Descarte | El canal decide si la venta entra en la pregunta 4, que es solo de tienda física |
+| Ventas | `vendedor_en_tienda_fisica` | Descarte | Una venta de tienda sin vendedor no se puede asignar en la pregunta 4 |
+| Ventas | `producto_en_catalogo` | Advertencia | La venta ocurrió: excluirla subestimaría las ventas. Queda marcada con `producto_en_catalogo = false` |
+| Catálogo | `producto_id_presente` | Descarte | Sin llave el producto no se cruza con ventas, devoluciones ni reseñas |
+| Catálogo | `precio_valido` | Advertencia | El precio no interviene en ninguna pregunta, y descartar el producto dejaría huérfanas sus ventas y reseñas. Queda en nulo y el texto original se conserva |
+| Catálogo | `categoria_conocida` | Advertencia | Descartar el producto dejaría huérfanas sus ventas. La regla mide cuántos productos quedarían sin categoría en la pregunta 5 |
+| Catálogo | `marca_presente` | Advertencia | La marca no interviene en ninguna pregunta |
+| Empleados | `evento_ubicable` (`id_empleado` y `fecha_evento` no nulos) | Descarte | Sin ellos el evento no se puede ubicar en la historia. El `NOT NULL` del schema no frena una llave nula: la frena esta regla |
+| Empleados | `tipo_evento_conocido` | Descarte | Sin tipo no se sabe si el evento abre, cambia o cierra una versión |
+| Empleados | `fecha_registro_valida` | Descarte | Desempata dos eventos del mismo día en `sequence_by` |
+| Empleados | `sucursal_presente` | Descarte | Las preguntas 3 y 4 cuentan por sucursal |
+| Empleados | `dni_presente` | Advertencia | La historia conserva el dni anterior (`ignore_null_updates_column_list`). Perder el evento sería peor |
+| Empleados | `salario_sin_corregir` | Advertencia | Mide los salarios corregidos (ver sección 7) sin perder eventos válidos |
+| Reseñas | `resena_id_presente` | Descarte | Es la llave para deduplicar las reingestas |
+| Reseñas | `calificacion_en_escala` | Descarte | El enunciado excluye las calificaciones inválidas de la pregunta 5 |
+| Reseñas | `fecha_valida` | Descarte | Sin fecha no hay mes para la pregunta 5 |
+| Reseñas | `producto_en_catalogo` | Advertencia | La reseña se conserva, pero no entra en la pregunta 5 (el join con el catálogo la deja fuera), como pide el enunciado |
+| Reseñas | `comentario_presente` | Advertencia | El comentario no interviene en ninguna pregunta |
+| Devoluciones | `devolucion_id_presente` | Descarte | Es la llave para deduplicar las reingestas |
+| Devoluciones | `venta_existente` | Descarte | Sin la venta de origen no se puede validar el reembolso |
+| Devoluciones | `reembolso_valido` (`0 <= monto_reembolso <= monto_venta`) | Descarte | Un reembolso imposible altera las ventas netas. Se evalúa sobre el join con `silver.ventas`, porque una expectativa mira una fila a la vez |
+| Devoluciones | `fecha_valida` | Descarte | Sin fecha no hay mes en la pregunta 1 |
+| Devoluciones | `sucursal_presente` | Descarte | Sin sucursal no entra en la pregunta 1 |
+| Devoluciones | `motivo_informado` | Advertencia | El motivo no interviene en ninguna pregunta |
+| Tracking | `evento_id_presente` | Descarte | Es la llave primaria del conector |
+| Tracking | `tracking_presente` | Descarte | Sin envío el evento no se agrupa en la pregunta 6 |
+| Tracking | `estado_conocido` | Descarte | Un estado fuera de `pendiente`, `en_transito`, `entregado` y `devuelto` no se puede ubicar en el ciclo del envío |
+| Tracking | `venta_existente` | Advertencia | El envío ocurrió aunque la venta no esté en los archivos (415 eventos). Se conserva marcado |
+| Tracking | `fecha_actualizacion_presente` | Advertencia | La pregunta 6 mide con `fecha_modificacion`, no con `fecha_actualizacion` (285 nulos) |
+| Sucursales | `sucursal_id_presente` | Falla | Es la referencia de todas las preguntas por sucursal: si llega rota, se detiene la actualización antes de publicar Gold |
+| Sucursales | `region_conocida` | Advertencia | La región no interviene en las preguntas; la regla avisa si aparece una nueva |
 
 **Cuarentena consultable y trazable:** `silver.cuarentena` aplica las mismas reglas de descarte (de `utils/reglas.py`) y guarda cada registro rechazado con:
 
@@ -331,7 +377,7 @@ flowchart LR
   - correo al fallar el job;
   - aviso si una corrida supera una hora;
   - correo de los pipelines ante fallas de actualización o de flujo.
-  - El correo se pasa como variable al desplegar (`correo_alertas`) para no versionarlo.
+  - El correo se pasa como variable al desplegar (`correo_alertas`) para no versionarlo. En el despliegue del 21 de noviembre se usó el correo real del usuario del workspace, leído con `databricks current-user me`.
 
 ## 11. CI/CD con el bundle
 
@@ -356,7 +402,7 @@ flowchart LR
   | Conector de Tracking | Serverless (lo que despliega Lakeflow Connect para los conectores query-based) | Corre en secuencia antes del pipeline principal |
   | Notebooks del job | Serverless para jobs | Tareas cortas y esporádicas; sin clusters all-purpose en el job productivo |
 
-- **Costos:** la última sección de `90_monitoreo.ipynb` suma `system.billing.usage` por recurso del proyecto.
+- **Costos:** la última sección de `90_monitoreo.ipynb` suma `system.billing.usage` por recurso del proyecto. Para identificar los recursos usa `system.lakeflow`, así que en este workspace falló con el mismo error de permisos de la [sección 14.4](#144-gobierno). Por eso los costos medidos no se cuentan como reto logrado.
 
 ## 13. Despliegue paso a paso
 
