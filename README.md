@@ -423,6 +423,14 @@ Rechazos en `silver.cuarentena` al cierre del lote 3:
 
 Un registro puede fallar más de una regla: por ejemplo, una devolución sin venta falla `venta_existente` y también `reembolso_valido`.
 
+**Las mismas cifras en el pipeline, en la actualización del lote 3:**
+
+- **Totales:** el panel de `silver.ventas` muestra 17.488 registros escritos (97,2%) y 512 descartados (2,8%).
+- **Reglas que fallaron:** las que descartan registros dan 347, 105 y 66, igual que la tabla anterior. `producto_en_catalogo` tiene la acción ALLOW, es decir, advierte sin descartar.
+- **Reglas que pasaron:** las otras cinco no tuvieron fallas (5 met, 4 unmet).
+
+![Expectativas de silver.ventas en la actualización del lote 3](docs/img/03_calidad_silver_ventas.png)
+
 ### 14.2 Las dos corridas del conector
 
 `DESCRIBE HISTORY electrocasa_dev.bronze.tracking_envios`:
