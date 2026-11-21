@@ -377,7 +377,7 @@ flowchart LR
   - correo al fallar el job;
   - aviso si una corrida supera una hora;
   - correo de los pipelines ante fallas de actualización o de flujo.
-  - El correo se pasa como variable al desplegar (`correo_alertas`) para no versionarlo. En el despliegue del 21 de noviembre se usó el correo real del usuario del workspace, leído con `databricks current-user me`.
+  - El correo se pasa como variable al desplegar (`correo_alertas`) para no versionarlo. En el despliegue del 21 de noviembre se usó el correo real del usuario del workspace, una cuenta `@hotmail.com` (la primera parte se omite por privacidad), leído con `databricks current-user me`.
 
 ## 11. CI/CD con el bundle
 
