@@ -1,8 +1,59 @@
 # ElectroCasa Lakehouse
 
-Plataforma de datos de punta a punta sobre Azure Databricks para ElectroCasa, una cadena de 40 tiendas de electrodomésticos en Perú. Integra seis fuentes heterogéneas en un modelo Medallion con Lakeflow Spark Declarative Pipelines, orquesta todo con Lakeflow Jobs, lo gobierna con Unity Catalog y lo despliega con un Declarative Automation Bundle de dos targets.
+![Azure Databricks](https://img.shields.io/badge/Azure_Databricks-serverless-FF3621?logo=databricks&logoColor=white)
+![Lakeflow](https://img.shields.io/badge/Lakeflow-Declarative_Pipelines-1B3139)
+![Unity Catalog](https://img.shields.io/badge/Unity_Catalog-gobierno-1B3139)
+![Delta Lake](https://img.shields.io/badge/Delta_Lake-Medallion-00ADD4)
+![PySpark](https://img.shields.io/badge/PySpark-Python-E25A1C?logo=apachespark&logoColor=white)
+![CI/CD](https://img.shields.io/badge/CI%2FCD-Declarative_Automation_Bundles-2E7D32)
+
+Plataforma de datos de punta a punta sobre Azure Databricks para ElectroCasa, una cadena de 40 tiendas de electrodomésticos en Perú:
+- integra seis fuentes heterogéneas en un modelo Medallion con Lakeflow Spark Declarative Pipelines;
+- orquesta todo con Lakeflow Jobs;
+- lo gobierna con Unity Catalog;
+- lo despliega con un Declarative Automation Bundle de dos targets.
+
+Todo corrió de verdad: cada cifra de este README sale de las ejecuciones del 21 de noviembre de 2026.
 
 Los datos, las sucursales y las personas del caso son ficticios.
+
+> **English summary.**
+> - **What:** end-to-end lakehouse on serverless Azure Databricks for a fictional 40-store appliance retailer in Peru.
+> - **Ingestion:** six heterogeneous sources land in a Medallion architecture built with Lakeflow Spark Declarative Pipelines. CSV and JSON files arrive through Auto Loader and COPY INTO, and an Azure SQL table through a Lakeflow Connect query-based connector.
+> - **Silver:** expectations route rejected records to a queryable quarantine, and employee history is kept as SCD Type 2 with AUTO CDC.
+> - **Gold:** answers six business questions.
+> - **Governance and delivery:** Unity Catalog controls access with groups, GRANT/REVOKE and column masks. Lakeflow Jobs orchestrates the flow, and a Declarative Automation Bundle deploys it to dev and prod.
+> - **Evidence:** every figure comes from real runs on November 21, 2026.
+
+![Tramo de Silver y Gold del pipeline, con las insignias de calidad de cada tabla](docs/img/01b_pipeline_silver_y_gold.png)
+
+## En cifras
+
+| | |
+|---|---|
+| **Fuentes** | 6, con tres métodos de ingesta: Auto Loader, COPY INTO y el conector de Lakeflow Connect |
+| **Tablas** | 7 en Bronze, 11 en Silver y 9 en Gold |
+| **Calidad** | 36 reglas declaradas en `src/electrocasa/utils/reglas.py` (24 descartan y 12 advierten); 902 registros en `silver.cuarentena`, cada uno con su fuente y su regla |
+| **Ventas** | 18.000 distintas, 17.488 válidas y 512 rechazadas, sin duplicados después de reingestar los tres lotes |
+| **Historia de Empleados** | 4.049 versiones SCD Type 2, con 63 eventos tardíos ubicados en su lugar |
+| **Tracking** | 15.139 eventos en un solo `MERGE`; las corridas siguientes del conector no duplicaron nada |
+| **Orquestación** | Job de 4 tareas; los tres lotes en SUCCESS, entre 5 y 6 minutos cada uno |
+| **Despliegue** | Bundle con `dev` (5 recursos) y `prod` (10, con permisos) |
+
+## Vistazo rápido
+
+<table>
+<tr>
+<td width="50%"><a href="docs/img/02_job_orquestacion.png"><img src="docs/img/02_job_orquestacion.png" alt="Job de orquestación con sus cuatro tareas en verde"></a><br><sub>Job: COPY INTO, conector de Tracking, pipeline y validación, en el lote 3</sub></td>
+<td width="50%"><a href="docs/img/03_calidad_silver_ventas.png"><img src="docs/img/03_calidad_silver_ventas.png" alt="Expectativas de silver.ventas"></a><br><sub>Calidad: reglas de <code>silver.ventas</code>, 17.488 escritas y 512 descartadas</sub></td>
+</tr>
+<tr>
+<td width="50%"><a href="docs/img/04_linaje_gold.png"><img src="docs/img/04_linaje_gold.png" alt="Linaje de una tabla de Gold"></a><br><sub>Linaje en Unity Catalog: Gold hacia sus tablas de Silver</sub></td>
+<td width="50%"><a href="docs/img/05a_revoke.png"><img src="docs/img/05a_revoke.png" alt="SHOW GRANTS antes y después del REVOKE"></a><br><sub>Gobierno: <code>SHOW GRANTS</code> antes y después del <code>REVOKE</code></sub></td>
+</tr>
+</table>
+
+Las capturas tienen tapados el usuario y el nombre de la cuenta. El detalle de cada una está en la [sección 14](#14-evidencia-de-ejecución).
 
 ## Cómo revisar este repositorio
 
