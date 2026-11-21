@@ -350,7 +350,7 @@ databricks bundle run -t dev electrocasa_setup
 
 ## 14. Evidencia de ejecución
 
-Todo corrió el 21 de noviembre de 2026 en un workspace serverless de Azure Databricks (West US 2), con los tres lotes en orden. En las capturas está tapado el nombre de usuario de la cuenta.
+Todo corrió el 21 de noviembre de 2026 en un workspace serverless de Azure Databricks (West US 2), con los tres lotes en orden. En las capturas están tapados el usuario y el nombre de la cuenta.
 
 **Pipeline `electrocasa_medallion_dev`:**
 
@@ -504,6 +504,8 @@ Demostración de `REVOKE` sobre `electrocasa_dev.silver`:
 | Después de `GRANT SELECT ... TO electrocasa_analistas` | `electrocasa_analistas`, `SELECT`, `SCHEMA`, `electrocasa_dev.silver` |
 | Después de `REVOKE SELECT ... FROM electrocasa_analistas` | Sin filas |
 
+![SHOW GRANTS antes y después del REVOKE en la salida del setup](docs/img/05a_revoke.png)
+
 **Máscara de dni y salario.** La consulta a `gold.empleados_vigentes`, una tabla derivada de la historia de Empleados, hecha por un miembro de `electrocasa_ingenieria` (el dueño del pipeline), devuelve los valores reales. Para cualquier otro usuario, la misma máscara declarada en la tabla devuelve el dni con sus tres últimos dígitos y el salario nulo.
 
 | miembro_de_ingenieria | id_empleado | dni | salario |
@@ -512,14 +514,34 @@ Demostración de `REVOKE` sobre `electrocasa_dev.silver`:
 | true | EMP-00003 | 59464684 | 2474.04 |
 | true | EMP-00004 | 48867538 | 1532.42 |
 
-**Tablas de sistema.** En este workspace, `system.lakeflow` no está disponible para el usuario del proyecto:
+En la captura está tapada la columna `nombre`.
+
+![Consulta a gold.empleados_vigentes hecha por un miembro de electrocasa_ingenieria](docs/img/07_mascara_dni_salario.png)
+
+**Acceso de Auditoría a `system`.** El setup intenta cinco `GRANT` para `electrocasa_auditoria`:
+
+- `USE CATALOG` sobre `system`;
+- `USE SCHEMA` sobre `system.access`;
+- `SELECT` sobre las tablas `audit`, `table_lineage` y `column_lineage`.
+
+El primero falló porque el usuario del proyecto no tiene `MANAGE` sobre el catálogo `system`. La celda marca cinco errores, uno por sentencia.
+
+```
+PERMISSION_DENIED: Principal '<usuario del proyecto>' does not have MANAGE on Catalog 'system'.
+```
+
+![Salida del setup: los GRANT sobre system rechazados por falta de MANAGE](docs/img/05b_acceso_system.png)
+
+**Tablas de sistema.** En este workspace, `system.lakeflow` tampoco está disponible para el usuario del proyecto:
 
 ```
 [INSUFFICIENT_PERMISSIONS] Insufficient privileges:
 Principal does not have USE SCHEMA on Schema 'system.lakeflow'. SQLSTATE: 42501
 ```
 
-Por eso el monitoreo usa el event log del pipeline y el historial de corridas del job, y la evidencia del grupo de Auditoría es la pestaña Lineage de Catalog Explorer, como prevé el enunciado.
+Por eso el monitoreo usa el event log del pipeline y el historial de corridas del job, y la evidencia del grupo de Auditoría es la pestaña Lineage de Catalog Explorer, como prevé el enunciado. El linaje de `gold.ventas_netas_sucursal_mes` muestra que sale de `silver.ventas`, `silver.devoluciones` y `silver.sucursales`. En la captura está tapado el dueño de cada tabla.
+
+![Linaje de gold.ventas_netas_sucursal_mes en Catalog Explorer](docs/img/04_linaje_gold.png)
 
 ### 14.5 Monitoreo: métricas de las expectativas
 
@@ -586,7 +608,18 @@ Reto `VARIANT`, reseñas por origen leído del campo `metadata`:
 | tienda | 1.328 | 222 |
 | web | 3.145 | 534 |
 
-**Pregunta 6, despachos por courier:** COURIER_PENDIENTE
+**Pregunta 6, despachos por courier.** Después de estandarizar los nombres quedan tres couriers:
+
+| Courier | Envíos | Entregas con tiempo medido | Horas promedio de entrega | Envíos finalizados | Devueltos | % devueltos |
+|---|---|---|---|---|---|---|
+| Olva Courier | 1.773 | 1.391 | 103,86 | 1.476 | 85 | 5,76 |
+| Servientrega | 1.799 | 1.363 | 103,83 | 1.476 | 113 | 7,66 |
+| Shalom | 1.760 | 1.399 | 102,43 | 1.484 | 85 | 5,73 |
+
+- **Tiempos de entrega:** casi iguales, entre 102 y 104 horas.
+- **Devoluciones:** Servientrega devuelve más que los otros dos. El porcentaje es sobre los envíos finalizados: 113 de 1.476.
+
+![Respuesta de Gold para la pregunta 6 en la salida del monitoreo](docs/img/06_despachos_courier.png)
 
 ## 15. Retos opcionales
 
