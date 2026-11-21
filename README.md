@@ -95,7 +95,10 @@ electrocasa-lakehouse/
 │   ├── 02_validacion.ipynb            tarea del job: conteos, rechazos y falla si Gold queda vacía
 │   ├── 90_monitoreo.ipynb             event log, system.lakeflow y system.billing
 │   └── 91_reprocesar_cuarentena.ipynb reproceso de registros rechazados
-├── scripts/subir_lote.ps1             sube al volume los archivos de un lote (1, 2 o 3)
+├── scripts/
+│   ├── levantar.ps1                   crea el workspace serverless y despliega y corre todo, por pasos reanudables
+│   ├── bajar.ps1                      borra bundle, catálogos, Connection, workspace y grupo de recursos
+│   └── subir_lote.ps1                 sube al volume los archivos de un lote (1, 2 o 3)
 ├── tests/test_normalizacion.py        pruebas locales de la normalización con PySpark
 └── README.md
 ```
@@ -288,7 +291,18 @@ flowchart LR
 
 El workspace es de tipo serverless (en uno serverless los catálogos usan el almacenamiento por defecto y no hay VMs que administrar).
 
-**En la interfaz:**
+**Automático:** `scripts/levantar.ps1` hace todo esto en nueve pasos, con el CLI de Azure y el de Databricks.
+Crea el grupo de recursos y el workspace serverless, pide los datos de la Connection sin guardarlos, crea los
+catálogos, despliega, corre el setup, los tres lotes, la segunda corrida del conector, el monitoreo y el
+despliegue de `prod`. Se retoma desde un paso con `-Desde <n>`. Hace una pausa para que los grupos se creen en la
+interfaz, como pide el enunciado. `scripts/bajar.ps1` borra todo al terminar.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\levantar.ps1 -CorreoAlertas <correo> -Datos <carpeta datos>
+powershell -ExecutionPolicy Bypass -File .\scriptsajar.ps1
+```
+
+**Manual, en la interfaz:**
 
 1. Crear los grupos `electrocasa_ingenieria`, `electrocasa_analistas` y `electrocasa_auditoria` en **Settings > Identity and access > Groups**, y agregarse a `electrocasa_ingenieria`.
 2. Crear la Connection de Unity Catalog de tipo SQL Server `electrocasa_tracking_sqlserver` con el host, el usuario y la contraseña que comparte el docente. Si el asistente pide un catálogo foráneo, llamarlo `electrocasa_sqlserver`.
