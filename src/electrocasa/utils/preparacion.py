@@ -237,7 +237,7 @@ def preparar_tracking(bronze):
         F.col("evento_id").cast("bigint").alias("evento_id"),
         N.texto("tracking_id").alias("tracking_id"),
         N.texto("venta_id").alias("venta_id"),
-        F.initcap(F.lower(N.texto("courier"))).alias("courier"),
+        F.coalesce(N.estandarizar("courier", N.COURIERS), F.initcap(F.lower(N.texto("courier")))).alias("courier"),
         N.estandarizar("estado_entrega", N.ESTADOS_ENTREGA).alias("estado_entrega"),
         N.texto("sucursal_origen").alias("sucursal_origen"),
         F.col("fecha_actualizacion").cast("date").alias("fecha_actualizacion"),

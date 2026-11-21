@@ -202,6 +202,7 @@ ORDER BY fuente, regla;
 | Auto Loader o COPY INTO | Ver sección 4 |
 | Mensajes reprocesados de Tracking | Dentro de cada `tracking_id`, un estado repetido se queda con el primero (menor `fecha_modificacion`). La pregunta 6 usa el primer pendiente, el primer entregado y la existencia de un devuelto, así que la deduplicación no altera ninguna medida |
 | Alta sin fecha | Un evento sin `fecha_evento` va a cuarentena. Si es el alta, el empleado no cuenta en la dotación, porque la definición exige un alta con fecha |
+| Couriers | El origen escribe el mismo courier de varias formas, incluido Olva como «Olva» y como «Olva Courier». Se mapean a un conjunto cerrado (Olva Courier, Servientrega, Shalom); un courier nuevo queda con initcap hasta agregarlo al mapeo |
 | Productos repetidos en marzo | Se conserva el registro con precio válido y, entre dos válidos, el de mayor precio, para que la regla sea determinista |
 
 ## 8. Gold: una tabla por pregunta
@@ -349,51 +350,208 @@ databricks bundle run -t dev electrocasa_setup
 
 ## 14. Evidencia de ejecución
 
-> Cada bloque se completa con la salida o la captura de la corrida real.
+Todo corrió el 21 de noviembre de 2026 en un workspace serverless de Azure Databricks (West US 2), con los tres lotes en orden.
 
 ### 14.1 Conteos después de cada lote
 
-Salen de `default.conteos_por_corrida`, la última celda de `02_validacion.ipynb`.
+Salen de `default.conteos_por_corrida`, que llena la tarea `validacion` en cada corrida del job.
 
 | Tabla | Lote 1 | Lote 2 | Lote 3 |
 |---|---|---|---|
-| bronze.ventas | | | |
-| silver.ventas | | | |
-| bronze.empleados | | | |
-| silver.empleados_historia | | | |
-| bronze.resenas | | | |
-| silver.resenas | | | |
-| bronze.devoluciones | | | |
-| silver.devoluciones | | | |
-| bronze.catalogo | | | |
-| silver.catalogo | | | |
-| silver.cuarentena (rechazados) | | | |
+| bronze.ventas | 6.783 | 13.622 | 18.240 |
+| silver.ventas | 6.604 | 13.118 | 17.488 |
+| bronze.empleados | 2.257 | 3.524 | 4.448 |
+| silver.empleados_eventos | 2.239 | 3.495 | 4.410 |
+| silver.empleados_historia (versiones SCD Type 2) | 2.121 | 3.242 | 4.049 |
+| bronze.resenas | 5.292 | 9.280 | 9.280 |
+| silver.resenas | 5.226 | 9.097 | 9.097 |
+| bronze.devoluciones | 1.387 | 3.091 | 4.217 |
+| silver.devoluciones | 1.301 | 2.877 | 3.908 |
+| bronze.catalogo | 2.305 | 4.705 | 4.705 |
+| silver.catalogo_snapshots | 2.280 | 4.680 | 4.680 |
+| silver.catalogo | 2.280 | 2.400 | 2.400 |
+| bronze.sucursales / silver.sucursales | 40 / 40 | 40 / 40 | 40 / 40 |
+| bronze.tracking_envios / silver.tracking_envios | 15.139 / 15.049 | 15.139 / 15.049 | 15.139 / 15.049 |
+| silver.cuarentena | 349 | 700 | 902 |
 
-Esperado según el perfil de los archivos:
+Lo que demuestran los conteos:
 
-- Bronze de ventas acumula 6.783, 13.622 y 18.240 filas.
-- Silver de ventas no crece con las 120 repetidas de cada lote.
-- Bronze de reseñas acumula 5.292 y 9.280 filas.
-- Silver de reseñas descuenta las 80 repetidas.
+- **Las reingestas no duplican.**
+  - Ventas: Bronze acumula las 18.240 filas, incluidas las 240 repetidas entre lotes. Silver tiene 17.488 más 512 rechazadas, que son exactamente los 18.000 `venta_id` distintos.
+  - Reseñas: 9.097 más 103 rechazadas, o sea las 9.200 distintas.
+  - Devoluciones: 3.908 más 249 rechazadas, o sea las 4.157 distintas.
+- **Catálogo:** el producto repetido del snapshot de marzo queda una sola vez (2.305 filas, 2.280 productos). `silver.catalogo` sube a 2.400 con los 120 productos nuevos de agosto.
+- **Empleados:** los 38 eventos sin fecha van a cuarentena. Los 63 eventos tardíos del lote 3 se ubican en su lugar de la historia, que crece de 3.242 a 4.049 versiones.
+- **Tracking:** el conector trae los 15.139 eventos una sola vez. Silver deja 15.049 después de quitar 90 mensajes reprocesados.
+
+Rechazos en `silver.cuarentena` al cierre del lote 3:
+
+| Fuente | Regla | Registros |
+|---|---|---|
+| ventas | monto_positivo | 347 |
+| ventas | sucursal_presente | 105 |
+| ventas | cantidad_positiva | 66 |
+| devoluciones | reembolso_valido | 249 |
+| devoluciones | venta_existente | 183 |
+| resenas | calificacion_en_escala | 103 |
+| empleados | evento_ubicable | 38 |
+
+Un registro puede fallar más de una regla: por ejemplo, una devolución sin venta falla `venta_existente` y también `reembolso_valido`.
 
 ### 14.2 Las dos corridas del conector
 
-`DESCRIBE HISTORY electrocasa_dev.bronze.tracking_envios`: la primera corrida deja un `MERGE` con 15.139 filas y la segunda no agrega una versión con filas nuevas.
+`DESCRIBE HISTORY electrocasa_dev.bronze.tracking_envios`:
+
+| Versión | Momento (UTC) | Operación | Métricas |
+|---|---|---|---|
+| 2 | 2026-11-21 18:41:46 | MERGE | `numSourceRows` 15.139, `numTargetRowsInserted` 15.139, `numTargetRowsUpdated` 0 |
+| 1 | 2026-11-21 18:41:26 | DLT SETUP | |
+| 0 | 2026-11-21 18:41:24 | CREATE TABLE | |
+
+La primera corrida (dentro del job del lote 1) hizo el único `MERGE`, con los 15.139 eventos. Después el conector corrió tres veces más sin agregar ninguna versión:
+
+- dentro del job de los lotes 2 y 3;
+- una vez por separado, a las 19:09 UTC, con la actualización terminada en `COMPLETED`.
+
+La ingesta es incremental por el cursor `fecha_modificacion`.
 
 ### 14.3 Job y bundle
 
-- Captura del job con sus cuatro tareas en verde.
-- Salida de `databricks bundle deploy`.
+| Corrida del job `electrocasa_orquestacion_dev` | Inicio | Fin | Resultado |
+|---|---|---|---|
+| Lote 1 | 18:40:02 | 18:45:26 | SUCCESS |
+| Lote 2 | 18:54:08 | 19:00:05 | SUCCESS |
+| Lote 3 | 19:02:48 | 19:08:23 | SUCCESS |
+
+Cada corrida ejecutó las cuatro tareas en orden: `carga_copy_into`, `ingesta_tracking`, `pipeline_principal` y `validacion`. La validación no falló en ninguna, así que ninguna tabla de Gold quedó vacía.
+
+Despliegue de los dos targets con el CLI de Databricks:
+
+```
+$ databricks bundle validate -t dev
+Validation OK!
+$ databricks bundle deploy -t dev
+Created jobs.electrocasa_setup
+Created jobs.electrocasa_monitoreo
+Created pipelines.electrocasa_tracking
+Created pipelines.electrocasa_pipeline
+Created jobs.electrocasa_job
+Resources: 5 created, 0 changed, 0 deleted, 0 unchanged
+$ databricks bundle deploy -t prod
+Created jobs.electrocasa_setup
+Created jobs.electrocasa_monitoreo
+Created pipelines.electrocasa_tracking
+Created pipelines.electrocasa_pipeline
+Created jobs.electrocasa_job
+Created ... .permissions (5)
+Resources: 10 created, 0 changed, 0 deleted, 0 unchanged
+$ databricks bundle run -t prod electrocasa_setup
+"electrocasa_setup_prod" TERMINATED SUCCESS
+```
 
 ### 14.4 Gobierno
 
-- `SHOW GRANTS` antes y después del `REVOKE`.
-- Resultado del intento de acceso a `system.access`, o el error y la captura de la pestaña Lineage.
-- La misma consulta a `gold.empleados_vigentes` como miembro de `electrocasa_ingenieria` (valores reales) y como alguien fuera del grupo (dni enmascarado y salario nulo).
+`SHOW GRANTS` sobre el catálogo y los schemas después del setup:
 
-### 14.5 Monitoreo
+| Principal | Privilegios | Objeto |
+|---|---|---|
+| electrocasa_ingenieria | USE CATALOG | catálogo electrocasa_dev |
+| electrocasa_analistas | USE CATALOG | catálogo electrocasa_dev |
+| electrocasa_auditoria | USE CATALOG | catálogo electrocasa_dev |
+| electrocasa_ingenieria | USE SCHEMA, SELECT, MODIFY, CREATE TABLE, CREATE MATERIALIZED VIEW | bronze, silver y gold |
+| electrocasa_analistas | USE SCHEMA, SELECT | gold |
+| electrocasa_auditoria | USE SCHEMA, SELECT | gold |
 
-Salidas de `90_monitoreo.ipynb`: métricas de las expectativas e historial de corridas o, si no está disponible, el error y la alternativa.
+Demostración de `REVOKE` sobre `electrocasa_dev.silver`:
+
+| Momento | `SHOW GRANTS electrocasa_analistas ON SCHEMA electrocasa_dev.silver` |
+|---|---|
+| Después de `GRANT SELECT ... TO electrocasa_analistas` | `electrocasa_analistas`, `SELECT`, `SCHEMA`, `electrocasa_dev.silver` |
+| Después de `REVOKE SELECT ... FROM electrocasa_analistas` | Sin filas |
+
+**Máscara de dni y salario.** La consulta a `gold.empleados_vigentes`, una tabla derivada de la historia de Empleados, hecha por un miembro de `electrocasa_ingenieria` (el dueño del pipeline), devuelve los valores reales. Para cualquier otro usuario, la misma máscara declarada en la tabla devuelve el dni con sus tres últimos dígitos y el salario nulo.
+
+| miembro_de_ingenieria | id_empleado | dni | salario |
+|---|---|---|---|
+| true | EMP-00001 | 22108722 | 3058.00 |
+| true | EMP-00003 | 59464684 | 2474.04 |
+| true | EMP-00004 | 48867538 | 1532.42 |
+
+**Tablas de sistema.** En este workspace, `system.lakeflow` no está disponible para el usuario del proyecto:
+
+```
+[INSUFFICIENT_PERMISSIONS] Insufficient privileges:
+Principal does not have USE SCHEMA on Schema 'system.lakeflow'. SQLSTATE: 42501
+```
+
+Por eso el monitoreo usa el event log del pipeline y el historial de corridas del job, y la evidencia del grupo de Auditoría es la pestaña Lineage de Catalog Explorer, como prevé el enunciado.
+
+### 14.5 Monitoreo: métricas de las expectativas
+
+Del event log del pipeline (`event_log(TABLE(...))`). Las cifras suman las tres actualizaciones, porque cada lote recalcula las Materialized Views de Silver:
+
+| Tabla | Expectativa | Política | Pasan | Fallan |
+|---|---|---|---|---|
+| silver.ventas | monto_positivo | drop | 37.550 | 735 |
+| silver.ventas | sucursal_presente | drop | 38.074 | 211 |
+| silver.ventas | cantidad_positiva | drop | 38.142 | 143 |
+| silver.ventas | producto_en_catalogo | warn | 38.137 | 148 |
+| silver.devoluciones | reembolso_valido | drop | 8.086 | 519 |
+| silver.devoluciones | venta_existente | drop | 8.218 | 387 |
+| silver.resenas | calificacion_en_escala | drop | 23.420 | 272 |
+| silver.resenas | producto_en_catalogo | warn | 23.407 | 285 |
+| silver.catalogo_snapshots | precio_valido | warn | 11.412 | 228 |
+| empleados_cambios (vista del SCD Type 2) | evento_ubicable | drop | 4.410 | 38 |
+| empleados_cambios | salario_sin_corregir | warn | 4.430 | 18 |
+| silver.tracking_envios | estado_conocido | drop | 45.147 | 0 |
+| silver.tracking_envios | venta_existente | warn | 31.467 | 13.680 |
+
+En la última fila, los 13.680 que fallan son 415 eventos por actualización multiplicados por las corridas: la advertencia mide, no descarta.
+
+### 14.6 Respuestas de Gold
+
+**Pregunta 1, ventas netas** (extracto de la sucursal S01, ElectroCasa San Isidro):
+
+| Mes | Ventas | Devoluciones | Ventas netas | Cantidad de ventas | Ticket promedio |
+|---|---|---|---|---|---|
+| 2026-03 | 245.865,67 | 16.963,88 | 228.901,79 | 61 | 4.030,58 |
+| 2026-04 | 274.098,46 | 39.197,48 | 234.900,98 | 60 | 4.568,31 |
+| 2026-05 | 279.739,45 | 50.022,37 | 229.717,08 | 55 | 5.086,17 |
+| 2026-10 | 153.897,13 | 62.472,57 | 91.424,56 | 43 | 3.579,00 |
+
+**Pregunta 2, top 3 por unidades:**
+
+1. PRD-02306, Televisor Lenovo Lite 191: 30 unidades.
+2. PRD-00751, Calefactor Panasonic Smart 130: 29 unidades.
+3. PRD-00125, Aire acondicionado Bosch Lite 667: 27 unidades.
+
+En la tasa de devolución los primeros puestos tienen tasa 1,0: productos cuyas pocas ventas se devolvieron todas. El primero es PRD-01152 con 5 ventas y 5 devoluciones. El desempate es por cantidad de devoluciones.
+
+**Pregunta 3, dotación total al cierre de cada mes:**
+
+| Mes | Mar | Abr | May | Jun | Jul | Ago | Sep | Oct |
+|---|---|---|---|---|---|---|---|---|
+| Empleados activos | 1.042 | 1.078 | 1.086 | 1.121 | 1.128 | 1.155 | 1.179 | 1.129 |
+
+**Pregunta 4:** 5.505 filas de vendedor, sucursal y mes. Cada venta de tienda se asigna a la sucursal que tenía el vendedor en la fecha de la venta, según la historia SCD Type 2.
+
+**Pregunta 5, reseñas negativas** (extracto):
+
+| Categoría | Mes | Reseñas | Negativas | % |
+|---|---|---|---|---|
+| Línea blanca | 2026-10 | 357 | 75 | 21,01 |
+| Climatización | 2026-05 | 223 | 49 | 21,97 |
+| Cocina | 2026-04 | 205 | 27 | 13,17 |
+
+Reto `VARIANT`, reseñas por origen leído del campo `metadata`:
+
+| Origen | Reseñas | Negativas |
+|---|---|---|
+| app | 4.512 | 811 |
+| tienda | 1.328 | 222 |
+| web | 3.145 | 534 |
+
+**Pregunta 6, despachos por courier:** COURIER_PENDIENTE
 
 ## 15. Retos opcionales
 
@@ -402,7 +560,7 @@ Salidas de `90_monitoreo.ipynb`: métricas de las expectativas e historial de co
 | Ingesta por metadata | `src/electrocasa/config/fuentes_auto_loader.json` y `transformations/bronze.py` |
 | Cuarentena con trazabilidad completa | `silver.cuarentena` y `notebooks/91_reprocesar_cuarentena.ipynb` |
 | `VARIANT` en Reseñas | `silver.resenas.metadata` y `gold.resenas_negativas_origen_mes` (origen, versión de la app y campaña) |
-| Costos medidos | Última sección de `notebooks/90_monitoreo.ipynb` |
+| Costos medidos | Consulta lista en `notebooks/90_monitoreo.ipynb`; en este workspace el usuario no tiene acceso a las tablas de sistema (ver 14.4), así que no se cuenta como reto logrado |
 | Conector en el bundle | `resources/electrocasa_tracking.yml` |
 
 ## 16. Pruebas locales

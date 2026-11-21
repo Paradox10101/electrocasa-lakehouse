@@ -45,6 +45,13 @@ ESTADOS_ENTREGA = {
 
 CANALES = {"tienda fisica": "tienda_fisica", "ecommerce": "ecommerce"}
 
+COURIERS = {
+    "olva": "Olva Courier",
+    "olva courier": "Olva Courier",
+    "servientrega": "Servientrega",
+    "shalom": "Shalom",
+}
+
 
 def texto(columna):
     limpio = F.trim(F.col(columna))

@@ -44,7 +44,9 @@ def test_fechas_en_tres_formatos(spark):
     (["Climatización", "CLIMATIZACION"], N.CATEGORIAS, "Climatización"),
     (["Cambio Salario", "CAMBIO_SALARIO", "cambio_salario"], N.TIPOS_EVENTO, "cambio_salario"),
     (["cese", "BAJA"], N.TIPOS_EVENTO, "baja"),
-    (["En camino", "EN_CAMINO", "en_transito"], N.ESTADOS_ENTREGA, "en_transito"),
+    (["En camino", "EN_CAMINO", "en_transito", "En transito"], N.ESTADOS_ENTREGA, "en_transito"),
+    (["Olva", "OLVA COURIER", "olva courier", "Olva Courier"], N.COURIERS, "Olva Courier"),
+    (["SERVIENTREGA", "servientrega"], N.COURIERS, "Servientrega"),
 ])
 def test_estandarizacion_a_conjunto_cerrado(spark, variantes, mapa, canonico):
     assert set(_valores(spark, variantes, lambda c: N.estandarizar(c, mapa))) == {canonico}
