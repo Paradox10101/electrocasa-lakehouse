@@ -1,0 +1,138 @@
+fuente: ventas
+version: 1
+ultima_actualizacion: "2026-11-18"
+responsable: "area_comercial"
+llegada: "Archivos CSV con encabezado, un archivo por lote, en /Volumes/<catalogo>/default/vol_landing/ventas/"
+metodo_ingesta: "Auto Loader dentro del pipeline: es la fuente de mayor volumen y llega por lotes incrementales; Auto Loader recuerda qué archivos ya leyó y solo procesa los nuevos"
+frecuencia_esperada: "Un lote por cierre de período (en el caso: 31 de mayo, 31 de agosto y 31 de octubre de 2026)"
+tabla_bronze: "<catalogo>.bronze.ventas"
+tabla_silver: "<catalogo>.silver.ventas"
+llave: "venta_id"
+
+columnas:
+  - nombre: venta_id
+    tipo: "string"
+    nulo: false
+  - nombre: sucursal_id
+    tipo: "string"
+    nulo: false
+    regla: "Obligatoria: sin sucursal la venta no se puede asignar en la pregunta 1"
+  - nombre: producto_id
+    tipo: "string"
+    nulo: false
+    regla: "Si no existe en el catálogo, la venta se conserva y producto_en_catalogo queda en false (advertencia): es dinero real que sí ocurrió"
+  - nombre: vendedor_id
+    tipo: "string"
+    nulo: true
+    regla: "Obligatorio en tienda_fisica y vacío en ecommerce"
+  - nombre: cantidad
+    tipo: "int"
+    nulo: false
+    regla: "Mayor a 0"
+  - nombre: monto_total
+    tipo: "decimal(12,2)"
+    nulo: false
+    regla: "Mayor a 0, después de normalizar coma decimal y punto de miles"
+  - nombre: metodo_pago
+    tipo: "string"
+    nulo: false
+    valores_permitidos: ["Tarjeta", "Efectivo", "Yape", "Plin", "Transferencia"]
+  - nombre: fecha_venta
+    tipo: "date"
+    nulo: false
+  - nombre: canal
+    tipo: "string"
+    nulo: false
+    valores_permitidos: ["tienda_fisica", "ecommerce"]
+  - nombre: producto_en_catalogo
+    tipo: "boolean"
+    nulo: false
+    regla: "Columna calculada en Silver"
+
+reglas_de_calidad:
+  - nombre: monto_positivo
+    condicion: "monto_total IS NOT NULL AND monto_total > 0"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "El monto es la base de las preguntas 1 y 4: una venta sin monto o con monto negativo distorsiona ventas netas y ticket promedio, pero no justifica detener el pipeline"
+  - nombre: cantidad_positiva
+    condicion: "cantidad IS NOT NULL AND cantidad > 0"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Una venta con 0 unidades no es una venta y alteraría el top de productos por unidades"
+  - nombre: sucursal_presente
+    condicion: "sucursal_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin sucursal la venta no se puede ubicar en la pregunta 1"
+  - nombre: fecha_valida
+    condicion: "fecha_venta IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin fecha no hay mes de análisis"
+  - nombre: metodo_pago_conocido
+    condicion: "metodo_pago IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Un método fuera del conjunto cerrado indica un formato que la estandarización todavía no cubre; se revisa en cuarentena y se agrega al mapeo"
+  - nombre: canal_conocido
+    condicion: "canal IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "El canal decide si la venta entra en la pregunta 4"
+  - nombre: vendedor_en_tienda_fisica
+    condicion: "canal IS NULL OR canal <> 'tienda_fisica' OR vendedor_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Una venta de tienda sin vendedor no se puede atribuir en la pregunta 4"
+  - nombre: venta_id_presente
+    condicion: "venta_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin llave no se puede deduplicar ni relacionar con devoluciones"
+  - nombre: producto_en_catalogo
+    condicion: "producto_en_catalogo"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "La venta ocurrió aunque el producto falte en el catálogo; se conserva para no subestimar las ventas y se mide cuántas son"
+
+transformaciones_silver:
+  - "Textos con trim; cadena vacía pasa a nulo"
+  - "monto_total: se quita el texto de moneda; si la última coma va después del último punto, la coma es el decimal (1.234,50 a 1234.50); si no, se quitan las comas de miles; se convierte con try_cast a decimal(12,2)"
+  - "fecha_venta: se prueban los formatos yyyy-MM-dd'T'HH:mm:ss, yyyy-MM-dd y dd/MM/yyyy con try_to_timestamp y se guarda como date"
+  - "metodo_pago: minúsculas, sin tildes y con guion bajo como espacio; se mapea a 5 valores (TC, td y Tarjeta de credito a Tarjeta; EFV a Efectivo; TRF a Transferencia)"
+  - "Deduplicación por venta_id: se conserva la versión válida y, entre iguales, la primera ingestada; así una reingesta idéntica no duplica y un reproceso corregido reemplaza al rechazado"
+
+problemas_conocidos:
+  - problema: "metodo_pago escrito de 17 formas para 5 métodos"
+    ejemplo: "PLIN, Plin, YAPE, yape, TRF, EFV, TC, td, Tarjeta de credito"
+    filas_afectadas: "Todas las filas usan alguna variante (18.240 en los tres lotes)"
+    tratamiento: "Mapeo a conjunto cerrado y regla metodo_pago_conocido"
+  - problema: "monto_total con coma decimal y punto de miles"
+    ejemplo: "3.468,69 y 407,98"
+    filas_afectadas: "244 (221 con punto de miles y coma decimal, 23 solo con coma decimal)"
+    tratamiento: "Normalización del separador decimal antes del cast"
+  - problema: "monto_total vacío, negativo o cero"
+    ejemplo: "VTA-016025 con -1602.5"
+    filas_afectadas: "353 en filas de origen: 152 vacíos, 125 negativos y 76 en cero"
+    tratamiento: "Regla monto_positivo con descarte a cuarentena"
+  - problema: "cantidad en cero"
+    ejemplo: "VTA-011713"
+    filas_afectadas: "68"
+    tratamiento: "Regla cantidad_positiva con descarte a cuarentena"
+  - problema: "sucursal_id vacío"
+    ejemplo: "VTA-002640"
+    filas_afectadas: "105"
+    tratamiento: "Regla sucursal_presente con descarte a cuarentena"
+  - problema: "fecha_venta en tres formatos"
+    ejemplo: "2026-06-07, 07/06/2026 y VTA-011702 con 2026-05-29T10:35:23"
+    filas_afectadas: "14.642 con yyyy-MM-dd, 2.140 con dd/MM/yyyy y 1.458 con hora"
+    tratamiento: "Lectura con varios formatos y try_to_timestamp"
+  - problema: "producto_id que no existe en el catálogo"
+    ejemplo: "70 ventas, ninguna con un producto de los snapshots de marzo o agosto"
+    filas_afectadas: "70 (23, 32 y 15 por lote)"
+    tratamiento: "Se conservan con producto_en_catalogo = false (advertencia)"
+  - problema: "Ventas de un lote que vuelven a llegar idénticas en el lote siguiente"
+    ejemplo: "120 venta_id del lote 1 repetidos en el lote 2 y 120 del lote 2 en el lote 3"
+    filas_afectadas: "240 filas; 18.000 venta_id distintos sobre 18.240 filas"
+    tratamiento: "Deduplicación por venta_id en Silver"

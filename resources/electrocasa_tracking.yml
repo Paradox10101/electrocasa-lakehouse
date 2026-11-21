@@ -1,0 +1,38 @@
+resources:
+  pipelines:
+    electrocasa_tracking:
+      name: electrocasa_tracking_${bundle.target}
+      catalog: ${var.catalogo}
+      target: bronze
+      ingestion_definition:
+        connection_name: ${var.conexion_tracking}
+        objects:
+          - table:
+              source_catalog: ${var.bd_tracking}
+              source_schema: dbo
+              source_table: TrackingEnvios
+              destination_catalog: ${var.catalogo}
+              destination_schema: bronze
+              destination_table: tracking_envios
+              table_configuration:
+                primary_keys:
+                  - evento_id
+                scd_type: SCD_TYPE_1
+                include_columns:
+                  - evento_id
+                  - tracking_id
+                  - venta_id
+                  - courier
+                  - estado_entrega
+                  - sucursal_origen
+                  - fecha_actualizacion
+                  - fecha_modificacion
+                query_based_connector_config:
+                  cursor_columns:
+                    - fecha_modificacion
+      notifications:
+        - email_recipients:
+            - ${var.correo_alertas}
+          alerts:
+            - on-update-failure
+            - on-update-fatal-failure

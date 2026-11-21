@@ -1,0 +1,34 @@
+[
+ {
+  "tabla": "ventas",
+  "carpeta": "ventas",
+  "formato": "csv",
+  "sistema": "pos_sucursales",
+  "opciones": {"header": "true"},
+  "esquema": "venta_id STRING, sucursal_id STRING, producto_id STRING, vendedor_id STRING, cantidad STRING, monto_total STRING, metodo_pago STRING, fecha_venta STRING, canal STRING"
+ },
+ {
+  "tabla": "empleados",
+  "carpeta": "empleados",
+  "formato": "csv",
+  "sistema": "rrhh",
+  "opciones": {"header": "true"},
+  "esquema": "id_empleado STRING, nombre STRING, dni STRING, email STRING, salario STRING, sucursal_id STRING, cargo STRING, tipo_evento STRING, fecha_evento STRING, fecha_registro STRING"
+ },
+ {
+  "tabla": "devoluciones",
+  "carpeta": "devoluciones",
+  "formato": "csv",
+  "sistema": "pos_devoluciones",
+  "opciones": {"header": "true"},
+  "esquema": "devolucion_id STRING, venta_id STRING, sucursal_id STRING, producto_id STRING, motivo STRING, monto_reembolso STRING, fecha_devolucion STRING"
+ },
+ {
+  "tabla": "resenas",
+  "carpeta": "resenas",
+  "formato": "json",
+  "sistema": "app_resenas",
+  "opciones": {},
+  "esquema": "resena_id STRING, producto_id STRING, cliente_id STRING, calificacion STRING, comentario STRING, tags ARRAY<STRING>, respuestas ARRAY<STRUCT<autor: STRING, texto: STRING, fecha: STRING>>, fecha_resena STRING, metadata STRING"
+ }
+]

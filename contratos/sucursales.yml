@@ -1,0 +1,53 @@
+fuente: sucursales
+version: 1
+ultima_actualizacion: "2026-11-18"
+responsable: "operaciones"
+llegada: "Un archivo CSV con encabezado en /Volumes/<catalogo>/default/vol_landing/sucursales/"
+metodo_ingesta: "COPY INTO en una tarea del job: es una tabla de referencia de 40 filas en un archivo único; COPY INTO la carga una sola vez y no la duplica si el archivo se vuelve a subir"
+frecuencia_esperada: "Cambia solo cuando abre o cierra una sucursal"
+tabla_bronze: "<catalogo>.bronze.sucursales"
+tabla_silver: "<catalogo>.silver.sucursales"
+llave: "sucursal_id"
+
+columnas:
+  - nombre: sucursal_id
+    tipo: "string"
+    nulo: false
+  - nombre: nombre_sucursal
+    tipo: "string"
+    nulo: false
+  - nombre: distrito
+    tipo: "string"
+    nulo: false
+  - nombre: ciudad
+    tipo: "string"
+    nulo: false
+  - nombre: region
+    tipo: "string"
+    nulo: false
+  - nombre: fecha_apertura
+    tipo: "date"
+    nulo: false
+
+reglas_de_calidad:
+  - nombre: sucursal_id_presente
+    condicion: "sucursal_id IS NOT NULL"
+    politica: "fail"
+    destino_rechazos: "<catalogo>.silver.cuarentena y falla de la actualización del pipeline"
+    justificacion: "Es la referencia de todas las preguntas por sucursal: si llega rota, conviene detener la actualización antes que publicar Gold con sucursales sin identificar"
+  - nombre: region_conocida
+    condicion: "region IN ('Lima', 'Norte', 'Sur', 'Centro')"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "La región es descriptiva; una región nueva se mide y se revisa"
+
+transformaciones_silver:
+  - "ciudad: trim, minúsculas e initcap (AREQUIPA a Arequipa)"
+  - "fecha_apertura a date"
+  - "Deduplicación por sucursal_id con la versión más reciente"
+
+problemas_conocidos:
+  - problema: "ciudad con casing inconsistente"
+    ejemplo: "S27 con AREQUIPA y S33 con PIURA"
+    filas_afectadas: "2"
+    tratamiento: "initcap"

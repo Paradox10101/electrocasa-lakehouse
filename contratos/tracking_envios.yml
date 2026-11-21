@@ -1,0 +1,101 @@
+fuente: tracking_envios
+version: 1
+ultima_actualizacion: "2026-11-18"
+responsable: "operaciones_ecommerce (dato del courier, recibido a través de ElectroCasa)"
+llegada: "Azure SQL Database, tabla dbo.TrackingEnvios"
+metodo_ingesta: "Conector query-based de SQL Server (Lakeflow Connect), declarado en resources/electrocasa_tracking.yml"
+connection_unity_catalog: "electrocasa_tracking_sqlserver"
+cursor: fecha_modificacion
+modo_historia: "SCD Type 1: cada evento tiene su propio evento_id y la tabla de origen no modifica eventos ya escritos, así que no hay versiones que conservar; con evento_id como llave, una segunda corrida sin cambios no agrega filas y un evento corregido en el origen se actualiza en lugar de duplicarse"
+frecuencia_esperada: "En cada corrida del job; la tabla ya está completa desde el inicio del proyecto (15.139 eventos de marzo a octubre)"
+tabla_bronze: "<catalogo>.bronze.tracking_envios"
+tabla_silver: "<catalogo>.silver.tracking_envios"
+llave: evento_id
+depende_de:
+  - fuente: ventas
+    columna: venta_id
+
+columnas:
+  - nombre: evento_id
+    tipo: "bigint"
+    nulo: false
+  - nombre: tracking_id
+    tipo: "string"
+    nulo: false
+  - nombre: venta_id
+    tipo: "string"
+    nulo: true
+    regla: "Si no existe en silver.ventas, el evento se conserva con venta_existente = false (advertencia): el envío ocurrió y cuenta en la pregunta 6"
+  - nombre: courier
+    tipo: "string"
+    nulo: false
+  - nombre: estado_entrega
+    tipo: "string"
+    nulo: false
+    valores_permitidos: ["pendiente", "en_transito", "entregado", "devuelto"]
+  - nombre: sucursal_origen
+    tipo: "string"
+    nulo: true
+  - nombre: fecha_actualizacion
+    tipo: "date"
+    nulo: true
+  - nombre: fecha_modificacion
+    tipo: "timestamp"
+    nulo: false
+  - nombre: venta_existente
+    tipo: "boolean"
+    nulo: false
+
+reglas_de_calidad:
+  - nombre: estado_conocido
+    condicion: "estado_entrega IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Un estado desconocido no se puede ubicar en el ciclo pendiente, en tránsito, entregado o devuelto de la pregunta 6; en cuarentena se ve la variante y se agrega al mapeo"
+  - nombre: tracking_presente
+    condicion: "tracking_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin envío no hay a quién atribuir el evento"
+  - nombre: evento_id_presente
+    condicion: "evento_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Es la llave del conector"
+  - nombre: venta_existente
+    condicion: "venta_existente"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "El envío se hizo aunque la venta no esté en Silver"
+  - nombre: fecha_actualizacion_presente
+    condicion: "fecha_actualizacion IS NOT NULL"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "Los tiempos de la pregunta 6 se miden con fecha_modificacion, que nunca es nula"
+
+transformaciones_silver:
+  - "estado_entrega: minúsculas, sin tildes y con guion bajo como espacio; En camino, EN_CAMINO y en_transito a en_transito"
+  - "courier: trim, minúsculas e initcap"
+  - "Mensajes reprocesados: dentro de cada tracking_id, un mismo estado registrado más de una vez se queda con el primero (menor fecha_modificacion y, si empatan, menor evento_id). La pregunta 6 usa el primer pendiente, el primer entregado y la existencia de un devuelto, así que la deduplicación no altera ninguna de las tres medidas"
+
+problemas_conocidos:
+  - problema: "courier con casing inconsistente"
+    ejemplo: "Por medir en Bronze con la consulta de la sección 5 de la guía de despliegue"
+    filas_afectadas: "Por medir tras la primera corrida del conector"
+    tratamiento: "initcap"
+  - problema: "estado_entrega con valores y casing inconsistentes"
+    ejemplo: "En camino, EN_CAMINO, en_transito (según el material del curso)"
+    filas_afectadas: "Por medir tras la primera corrida del conector"
+    tratamiento: "Mapeo a conjunto cerrado y regla estado_conocido"
+  - problema: "Mensajes reprocesados con distinto evento_id"
+    ejemplo: "Por medir tras la primera corrida del conector"
+    filas_afectadas: "Por medir: filas válidas de Bronze menos filas de Silver"
+    tratamiento: "Deduplicación por tracking_id y estado"
+  - problema: "fecha_actualizacion nula"
+    ejemplo: "Por medir tras la primera corrida del conector"
+    filas_afectadas: "Por medir"
+    tratamiento: "Advertencia; los tiempos usan fecha_modificacion"
+  - problema: "venta_id que no existe en ventas"
+    ejemplo: "Por medir tras la primera corrida del conector"
+    filas_afectadas: "Por medir"
+    tratamiento: "Advertencia venta_existente"

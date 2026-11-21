@@ -1,0 +1,26 @@
+resources:
+  jobs:
+    electrocasa_setup:
+      name: electrocasa_setup_${bundle.target}
+      max_concurrent_runs: 1
+      email_notifications:
+        on_failure:
+          - ${var.correo_alertas}
+      tasks:
+        - task_key: setup
+          notebook_task:
+            notebook_path: ../notebooks/00_setup.ipynb
+            base_parameters:
+              catalogo: ${var.catalogo}
+          timeout_seconds: 1800
+
+    electrocasa_monitoreo:
+      name: electrocasa_monitoreo_${bundle.target}
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: monitoreo
+          notebook_task:
+            notebook_path: ../notebooks/90_monitoreo.ipynb
+            base_parameters:
+              catalogo: ${var.catalogo}
+          timeout_seconds: 1800

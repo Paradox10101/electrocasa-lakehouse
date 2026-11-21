@@ -1,0 +1,61 @@
+resources:
+  jobs:
+    electrocasa_job:
+      name: electrocasa_orquestacion_${bundle.target}
+      max_concurrent_runs: 1
+      trigger:
+        file_arrival:
+          url: /Volumes/${var.catalogo}/default/vol_landing/
+          min_time_between_triggers_seconds: 300
+          wait_after_last_change_seconds: 180
+      email_notifications:
+        on_failure:
+          - ${var.correo_alertas}
+        on_duration_warning_threshold_exceeded:
+          - ${var.correo_alertas}
+      health:
+        rules:
+          - metric: RUN_DURATION_SECONDS
+            op: GREATER_THAN
+            value: 3600
+      tasks:
+        - task_key: carga_copy_into
+          notebook_task:
+            notebook_path: ../notebooks/01_carga_copy_into.ipynb
+            base_parameters:
+              catalogo: ${var.catalogo}
+              job_run_id: "{{job.run_id}}"
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          retry_on_timeout: false
+          timeout_seconds: 1800
+
+        - task_key: ingesta_tracking
+          depends_on:
+            - task_key: carga_copy_into
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.electrocasa_tracking.id}
+          max_retries: 2
+          min_retry_interval_millis: 120000
+          timeout_seconds: 3600
+
+        - task_key: pipeline_principal
+          depends_on:
+            - task_key: ingesta_tracking
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.electrocasa_pipeline.id}
+            full_refresh: false
+          max_retries: 1
+          min_retry_interval_millis: 120000
+          timeout_seconds: 3600
+
+        - task_key: validacion
+          depends_on:
+            - task_key: pipeline_principal
+          notebook_task:
+            notebook_path: ../notebooks/02_validacion.ipynb
+            base_parameters:
+              catalogo: ${var.catalogo}
+              job_run_id: "{{job.run_id}}"
+          max_retries: 0
+          timeout_seconds: 1800

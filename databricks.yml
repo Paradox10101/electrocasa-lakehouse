@@ -1,0 +1,35 @@
+bundle:
+  name: electrocasa-lakehouse
+  engine: direct
+
+include:
+  - resources/*.yml
+
+variables:
+  catalogo:
+    description: Catálogo de Unity Catalog del entorno
+    default: electrocasa_dev
+  correo_alertas:
+    description: Correo real que recibe las alertas del job y de los pipelines; se pasa al desplegar, no se versiona
+  conexion_tracking:
+    description: Nombre de la Connection de Unity Catalog hacia la Azure SQL de Tracking
+    default: electrocasa_tracking_sqlserver
+  bd_tracking:
+    description: Base de datos de la Azure SQL de Tracking que comparte el docente; se pasa al desplegar, no se versiona
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      catalogo: electrocasa_dev
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalogo: electrocasa_prod
+    permissions:
+      - user_name: ${workspace.current_user.userName}
+        level: CAN_MANAGE

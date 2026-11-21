@@ -1,0 +1,128 @@
+fuente: empleados
+version: 1
+ultima_actualizacion: "2026-11-18"
+responsable: "recursos_humanos"
+llegada: "Archivos CSV con encabezado, un archivo de eventos por lote, en /Volumes/<catalogo>/default/vol_landing/empleados/"
+metodo_ingesta: "Auto Loader dentro del pipeline: cada lote agrega eventos nuevos (append) y la historia SCD Type 2 necesita una fuente de streaming"
+frecuencia_esperada: "Un lote por cierre de período (31 de mayo, 31 de agosto y 31 de octubre de 2026)"
+tabla_bronze: "<catalogo>.bronze.empleados"
+tabla_silver: "<catalogo>.silver.empleados_historia (SCD Type 2) y <catalogo>.silver.empleados_eventos (eventos válidos)"
+llave_evento: "id_empleado + tipo_evento + fecha_evento + fecha_registro"
+llave_entidad: "id_empleado"
+historizacion:
+  tipo: SCD Type 2
+  implementacion: "AUTO CDC (create_auto_cdc_flow con stored_as_scd_type=2) desde una vista temporal en streaming sobre bronze.empleados; las bajas (baja y cese) se aplican como DELETE y cierran la versión vigente"
+  columnas_de_vigencia: ["__START_AT", "__END_AT"]
+  orden_de_los_cambios: "struct(fecha_evento, fecha_registro): primero la fecha del evento y, si hay empate, el momento en que RR.HH. lo registró"
+  eventos_mismo_dia: "Decide fecha_registro, que tiene hora: el evento registrado antes va primero"
+  llegada_tardia: "AUTO CDC ordena por sequence_by y no por orden de llegada: un evento de junio que llega en el lote de octubre se inserta en su lugar de la historia y ajusta las vigencias de las versiones vecinas"
+
+columnas:
+  - nombre: id_empleado
+    tipo: "string"
+    nulo: false
+  - nombre: nombre
+    tipo: "string"
+    nulo: false
+  - nombre: dni
+    tipo: "string"
+    nulo: true
+    sensible: true
+    masking: "<catalogo>.silver.mascara_dni: electrocasa_ingenieria ve el valor real; el resto ve ***** más los tres últimos dígitos. Si un evento llega sin dni, la historia conserva el dni anterior (ignore_null_updates sobre dni)"
+  - nombre: email
+    tipo: "string"
+    nulo: false
+  - nombre: salario
+    tipo: "decimal(10,2)"
+    nulo: false
+    regla: "Entre 1.200 y 10.400 en los datos; un valor mayor a 50.000 se toma como salario sin punto decimal y se divide entre 100, con salario_corregido = true"
+    sensible: true
+    masking: "<catalogo>.silver.mascara_salario: electrocasa_ingenieria ve el valor real; el resto ve nulo (la columna es numérica)"
+  - nombre: salario_corregido
+    tipo: "boolean"
+    nulo: false
+  - nombre: sucursal_id
+    tipo: "string"
+    nulo: false
+  - nombre: cargo
+    tipo: "string"
+    nulo: false
+  - nombre: tipo_evento
+    tipo: "string"
+    nulo: false
+    valores_permitidos: ["alta", "transferencia", "cambio_salario", "baja"]
+  - nombre: fecha_evento
+    tipo: "date"
+    nulo: false
+  - nombre: fecha_registro
+    tipo: "timestamp"
+    nulo: false
+
+reglas_de_calidad:
+  - nombre: evento_ubicable
+    condicion: "id_empleado IS NOT NULL AND fecha_evento IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin empleado o sin fecha el evento no se puede ubicar en la historia; descartarlo protege las preguntas 3 y 4 sin detener el resto del pipeline. Queda en cuarentena para que RR.HH. complete la fecha"
+  - nombre: tipo_evento_conocido
+    condicion: "tipo_evento IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Un tipo desconocido no se sabe si abre, cambia o cierra la versión"
+  - nombre: fecha_registro_valida
+    condicion: "fecha_registro IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Es la columna que desempata los eventos del mismo día"
+  - nombre: sucursal_presente
+    condicion: "sucursal_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin sucursal la versión no sirve para la dotación ni para atribuir ventas"
+  - nombre: dni_presente
+    condicion: "dni IS NOT NULL"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "El dni no interviene en las preguntas; el evento sigue siendo válido para la historia"
+  - nombre: salario_sin_corregir
+    condicion: "NOT salario_corregido"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "Mide cuántos salarios se corrigieron; el evento se conserva porque la transferencia o el alta que trae sí es válida"
+
+transformaciones_silver:
+  - "tipo_evento: minúsculas, sin tildes y con guion bajo como espacio; 13 variantes a 4 valores, con cese como baja"
+  - "salario: decimal; si supera 50.000 se divide entre 100 (salario_corregido = true)"
+  - "email en minúsculas; textos con trim y vacío a nulo"
+  - "fecha_evento a date y fecha_registro a timestamp"
+  - "dni repetido en dos empleados: no se puede saber cuál es el correcto, así que se conservan los dos y se listan en <catalogo>.silver.dni_duplicados para revisión de RR.HH."
+
+problemas_conocidos:
+  - problema: "tipo_evento escrito de 13 formas, con cese como sinónimo de baja"
+    ejemplo: "Cambio Salario, CAMBIO_SALARIO, ALTA, cese"
+    filas_afectadas: "Todas las filas usan alguna variante (4.448 eventos)"
+    tratamiento: "Mapeo a conjunto cerrado y regla tipo_evento_conocido"
+  - problema: "Dos eventos del mismo empleado el mismo día"
+    ejemplo: "EMP-00352: alta y cambio_salario el 2026-05-09, registrados el 10 y el 12 de mayo"
+    filas_afectadas: "38 pares empleado y día"
+    tratamiento: "sequence_by con fecha_registro como desempate"
+  - problema: "Eventos registrados tarde que llegan en un lote posterior"
+    ejemplo: "EMP-01171: transferencia del 2026-08-02 registrada el 2026-10-10, llega en el lote 3"
+    filas_afectadas: "63 eventos del lote 3 con fecha_evento anterior a septiembre"
+    tratamiento: "AUTO CDC los ordena por sequence_by"
+  - problema: "fecha_evento vacía"
+    ejemplo: "EMP-01053 con un evento Alta sin fecha"
+    filas_afectadas: "38"
+    tratamiento: "Regla evento_ubicable con descarte a cuarentena. Un empleado cuya alta queda en cuarentena no cuenta en la dotación (pregunta 3), porque la definición exige un alta con fecha"
+  - problema: "dni vacío"
+    ejemplo: "58 eventos sin dni"
+    filas_afectadas: "58"
+    tratamiento: "Advertencia dni_presente; la historia conserva el dni anterior"
+  - problema: "Mismo dni en dos empleados distintos"
+    ejemplo: "28147179 en EMP-00557 y EMP-01077"
+    filas_afectadas: "6 dni"
+    tratamiento: "Se conservan y se listan en silver.dni_duplicados"
+  - problema: "Salarios fuera de rango por un orden de magnitud"
+    ejemplo: "EMP-00234 con 246616.0 en el alta y 2552.86 en el evento siguiente"
+    filas_afectadas: "18, todos entre 136.702 y 310.523 y sin decimales"
+    tratamiento: "División entre 100 con salario_corregido = true"

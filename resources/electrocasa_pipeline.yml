@@ -1,0 +1,23 @@
+resources:
+  pipelines:
+    electrocasa_pipeline:
+      name: electrocasa_medallion_${bundle.target}
+      catalog: ${var.catalogo}
+      schema: silver
+      serverless: true
+      continuous: false
+      root_path: ../
+      configuration:
+        electrocasa.catalogo: ${var.catalogo}
+        electrocasa.ruta_landing: /Volumes/${var.catalogo}/default/vol_landing
+        electrocasa.config_fuentes: ${workspace.file_path}/src/electrocasa/config/fuentes_auto_loader.json
+      libraries:
+        - glob:
+            include: ../src/electrocasa/transformations/**
+      notifications:
+        - email_recipients:
+            - ${var.correo_alertas}
+          alerts:
+            - on-update-failure
+            - on-update-fatal-failure
+            - on-flow-failure

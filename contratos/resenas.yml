@@ -1,0 +1,121 @@
+fuente: resenas
+version: 1
+ultima_actualizacion: "2026-11-18"
+responsable: "atencion_al_cliente"
+llegada: "Archivos JSON Lines (un objeto por línea), uno por lote, en /Volumes/<catalogo>/default/vol_landing/resenas/"
+metodo_ingesta: "Auto Loader dentro del pipeline con schema explícito: JSON anidado que llega por lotes incrementales"
+frecuencia_esperada: "Un lote por cierre de período (31 de julio y 31 de octubre de 2026)"
+tabla_bronze: "<catalogo>.bronze.resenas"
+tabla_silver: "<catalogo>.silver.resenas"
+llave: "resena_id"
+
+columnas:
+  - nombre: resena_id
+    tipo: "string"
+    nulo: false
+  - nombre: producto_id
+    tipo: "string"
+    nulo: false
+    regla: "Si no existe en el catálogo, la reseña se conserva con producto_en_catalogo = false y queda fuera de la pregunta 5, como pide el enunciado"
+  - nombre: cliente_id
+    tipo: "string"
+    nulo: false
+  - nombre: calificacion
+    tipo: "int"
+    nulo: false
+    regla: "Entre 1 y 5"
+  - nombre: es_negativa
+    tipo: "boolean"
+    nulo: false
+    regla: "Calificación 1 o 2"
+  - nombre: comentario
+    tipo: "string"
+    nulo: true
+  - nombre: tags
+    tipo: "array<string>"
+    nulo: false
+    regla: "Nulo y arreglo vacío significan lo mismo (sin etiquetas): el nulo se reemplaza por un arreglo vacío"
+  - nombre: respuestas
+    tipo: "array<struct<autor: string, texto: string, fecha: timestamp>>"
+    nulo: false
+    regla: "Una respuesta sin autor queda con autor sin_autor"
+  - nombre: fecha_resena
+    tipo: "date"
+    nulo: false
+  - nombre: metadata
+    tipo: "variant"
+    nulo: false
+    regla: "Su estructura cambia según el origen (app, web o tienda); se guarda como VARIANT y se consulta con try_variant_get"
+  - nombre: origen
+    tipo: "string"
+    nulo: false
+    valores_permitidos: ["app", "web", "tienda"]
+
+reglas_de_calidad:
+  - nombre: calificacion_en_escala
+    condicion: "calificacion IS NOT NULL AND calificacion BETWEEN 1 AND 5"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "El enunciado excluye las calificaciones inválidas del numerador y del denominador de la pregunta 5; descartarlas a cuarentena lo cumple y deja ver cuántas hubo"
+  - nombre: fecha_valida
+    condicion: "fecha_resena IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin fecha no hay mes de análisis"
+  - nombre: resena_id_presente
+    condicion: "resena_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin llave no se puede deduplicar"
+  - nombre: producto_en_catalogo
+    condicion: "producto_en_catalogo"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "La reseña sigue siendo válida para atención al cliente; solo se excluye de la pregunta 5"
+  - nombre: comentario_presente
+    condicion: "comentario IS NOT NULL"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "Una reseña puede tener solo calificación"
+
+transformaciones_silver:
+  - "calificacion con try_cast a int"
+  - "fecha_resena: formatos yyyy-MM-dd y dd/MM/yyyy a date"
+  - "tags nulo a arreglo vacío; comentario vacío a nulo"
+  - "respuestas: autor faltante a sin_autor y fecha de cada respuesta a timestamp"
+  - "metadata: try_parse_json a VARIANT; origen se extrae con try_variant_get"
+  - "Deduplicación por resena_id: versión válida primero y, entre iguales, la primera ingestada"
+
+problemas_conocidos:
+  - problema: "calificacion fuera de 1 a 5"
+    ejemplo: "RES-04804 con 6"
+    filas_afectadas: "103: 38 con 6, 37 nulas y 28 con 0"
+    tratamiento: "Regla calificacion_en_escala con descarte a cuarentena"
+  - problema: "comentario nulo o vacío"
+    ejemplo: "114 reseñas"
+    filas_afectadas: "114"
+    tratamiento: "Vacío a nulo y advertencia comentario_presente"
+  - problema: "tags nulo en vez de arreglo vacío"
+    ejemplo: "RES-05867"
+    filas_afectadas: "89"
+    tratamiento: "Nulo a arreglo vacío"
+  - problema: "Respuestas sin autor"
+    ejemplo: "8 respuestas con solo fecha y texto"
+    filas_afectadas: "8 respuestas"
+    tratamiento: "autor sin_autor"
+  - problema: "producto_id que no existe en el catálogo"
+    ejemplo: "113 reseñas"
+    filas_afectadas: "113"
+    tratamiento: "Se conservan con producto_en_catalogo = false y quedan fuera de la pregunta 5"
+  - problema: "fecha_resena en dos formatos"
+    ejemplo: "RES-01933 con 14/04/2026"
+    filas_afectadas: "80 con dd/MM/yyyy"
+    tratamiento: "Lectura con varios formatos"
+  - problema: "Reseñas del lote 1 repetidas en el lote 2"
+    ejemplo: "80 resena_id en los dos lotes"
+    filas_afectadas: "80; 9.200 reseñas distintas sobre 9.280 filas"
+    tratamiento: "Deduplicación por resena_id"
+  - problema: "metadata con cuatro estructuras según el origen"
+    ejemplo: "app con version y so; web con navegador; tienda con kiosko_id y sucursal_id; app con campania"
+    filas_afectadas: "4.218 app, 3.235 web, 1.374 tienda y 453 app con campaña"
+    tratamiento: "VARIANT en Silver y gold.resenas_negativas_origen_mes"

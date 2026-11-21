@@ -1,0 +1,103 @@
+fuente: devoluciones
+version: 1
+ultima_actualizacion: "2026-11-18"
+responsable: "area_comercial_postventa"
+llegada: "Archivos CSV con encabezado, uno por lote, en /Volumes/<catalogo>/default/vol_landing/devoluciones/"
+metodo_ingesta: "Auto Loader dentro del pipeline: lotes incrementales del mismo tipo que ventas"
+frecuencia_esperada: "Un lote por cierre de período (31 de mayo, 31 de agosto y 31 de octubre de 2026)"
+tabla_bronze: "<catalogo>.bronze.devoluciones"
+tabla_silver: "<catalogo>.silver.devoluciones"
+llave: "devolucion_id"
+depende_de:
+  - fuente: ventas
+    columna: venta_id
+
+columnas:
+  - nombre: devolucion_id
+    tipo: "string"
+    nulo: false
+  - nombre: venta_id
+    tipo: "string"
+    nulo: false
+    regla: "Tiene que existir en silver.ventas; si falta o no existe, la devolución va a cuarentena porque no se puede validar su monto"
+  - nombre: sucursal_id
+    tipo: "string"
+    nulo: false
+  - nombre: producto_id
+    tipo: "string"
+    nulo: false
+  - nombre: motivo
+    tipo: "string"
+    nulo: false
+    regla: "Vacío a sin_motivo"
+  - nombre: monto_reembolso
+    tipo: "decimal(12,2)"
+    nulo: false
+    regla: "No negativo y no mayor que el monto de la venta de origen"
+  - nombre: fecha_devolucion
+    tipo: "date"
+    nulo: false
+  - nombre: monto_venta
+    tipo: "decimal(12,2)"
+    nulo: false
+    regla: "Monto de la venta de origen, traído de silver.ventas para validar el reembolso"
+
+reglas_de_calidad:
+  - nombre: reembolso_valido
+    condicion: "monto_venta IS NOT NULL AND monto_reembolso IS NOT NULL AND monto_reembolso >= 0 AND monto_reembolso <= monto_venta"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Las devoluciones restan en las ventas netas: un reembolso negativo o mayor que la venta las distorsiona. La regla se evalúa sobre el resultado del join con silver.ventas, porque una expectativa mira una fila a la vez"
+  - nombre: venta_existente
+    condicion: "monto_venta IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin venta de origen el reembolso no se puede validar"
+  - nombre: fecha_valida
+    condicion: "fecha_devolucion IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin fecha no hay mes de análisis"
+  - nombre: sucursal_presente
+    condicion: "sucursal_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "La pregunta 1 resta las devoluciones en su sucursal"
+  - nombre: devolucion_id_presente
+    condicion: "devolucion_id IS NOT NULL"
+    politica: "drop"
+    destino_rechazos: "<catalogo>.silver.cuarentena"
+    justificacion: "Sin llave no se puede deduplicar"
+  - nombre: motivo_informado
+    condicion: "motivo <> 'sin_motivo'"
+    politica: "warn"
+    destino_rechazos: "Métricas del event log del pipeline"
+    justificacion: "El motivo no interviene en las preguntas"
+
+transformaciones_silver:
+  - "monto_reembolso con try_cast a decimal(12,2) y fecha_devolucion a date"
+  - "motivo en minúsculas y vacío a sin_motivo"
+  - "Join con silver.ventas (venta_id) para traer monto_venta antes de validar"
+  - "Deduplicación por devolucion_id: versión válida primero y, entre iguales, la primera ingestada"
+
+problemas_conocidos:
+  - problema: "monto_reembolso negativo"
+    ejemplo: "DEV-01720 con -4574.28"
+    filas_afectadas: "38"
+    tratamiento: "Regla reembolso_valido con descarte a cuarentena"
+  - problema: "monto_reembolso mayor que el monto de la venta"
+    ejemplo: "DEV-02667 con 1263.46 sobre una venta de 902.47"
+    filas_afectadas: "69"
+    tratamiento: "Regla reembolso_valido con descarte a cuarentena"
+  - problema: "motivo vacío"
+    ejemplo: "DEV-02275"
+    filas_afectadas: "71"
+    tratamiento: "sin_motivo y advertencia"
+  - problema: "venta_id vacío o que no existe en ventas"
+    ejemplo: "DEV-01868 sin venta_id"
+    filas_afectadas: "65: 35 vacíos y 30 inexistentes (más las que apunten a una venta rechazada)"
+    tratamiento: "Regla venta_existente con descarte a cuarentena"
+  - problema: "Devoluciones del lote anterior repetidas"
+    ejemplo: "30 devolucion_id del lote 1 en el lote 2 y 30 del lote 2 en el lote 3"
+    filas_afectadas: "60; 4.157 devoluciones distintas sobre 4.217 filas"
+    tratamiento: "Deduplicación por devolucion_id"
