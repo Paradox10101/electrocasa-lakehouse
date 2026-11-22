@@ -17,6 +17,14 @@ Todo corrió de verdad: cada cifra de este README sale de las ejecuciones del 21
 
 Los datos, las sucursales y las personas del caso son ficticios.
 
+**Todo lo necesario para revisar y reproducir el proyecto está en este README:**
+- el mapa de pautas y de justificaciones del enunciado, más abajo;
+- la arquitectura, las decisiones y la configuración, en las secciones 2 a 12;
+- la guía para desplegarlo en otro workspace, en la [sección 13](#13-despliegue-paso-a-paso);
+- la evidencia de la ejecución, en la [sección 14](#14-evidencia-de-ejecución).
+
+Lo único que no está en el repositorio, a propósito, son los datos del curso y las credenciales de Tracking. La sección 13 explica cómo se cargan los datos y cómo se pasan las credenciales.
+
 > **English summary.**
 > - **What:** end-to-end lakehouse on serverless Azure Databricks for a fictional 40-store appliance retailer in Peru.
 > - **Ingestion:** six heterogeneous sources land in a Medallion architecture built with Lakeflow Spark Declarative Pipelines. CSV and JSON files arrive through Auto Loader and COPY INTO, and an Azure SQL table through a Lakeflow Connect query-based connector.
@@ -537,6 +545,8 @@ databricks connections delete electrocasa_tracking_sqlserver
 ## 14. Evidencia de ejecución
 
 Todo corrió el 21 de noviembre de 2026 en un workspace serverless de Azure Databricks (West US 2), con los tres lotes en orden. En las capturas están tapados el usuario y el nombre de la cuenta.
+
+Ese mismo día, después de juntar esta evidencia, el workspace se borró para no generar costos. Las capturas y las salidas de esta sección son el registro de la ejecución. Para verlo funcionando de nuevo, la [sección 13](#13-despliegue-paso-a-paso) lo despliega en otro workspace.
 
 **Pipeline `electrocasa_medallion_dev`:**
 
