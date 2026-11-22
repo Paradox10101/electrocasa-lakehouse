@@ -442,11 +442,21 @@ for s in bronze silver gold; do databricks schemas create $s electrocasa_dev; do
 databricks volumes create electrocasa_dev default vol_landing MANAGED
 ```
 
-Si el primer comando responde `Metastore storage root URL does not exist`, el catálogo se crea en Catalog Explorer con **Create catalog** y almacenamiento **Default storage**, y después se corren las otras dos líneas. Así pasó en el workspace serverless de esta ejecución: ahí el almacenamiento por defecto solo se elige desde la interfaz.
+En el workspace serverless de esta ejecución, el primer comando respondió `Metastore storage root URL does not exist`: el CLI no creó el catálogo en el almacenamiento por defecto.
+
+Según [Microsoft Learn](https://learn.microsoft.com/en-us/azure/databricks/storage/default-storage), en un workspace serverless hay otras dos formas de crearlo:
+- **Por la interfaz:** en Catalog Explorer, con **Create catalog** y la opción **Use default storage**. Esta es la que se usó aquí.
+- **Por SQL:** con `CREATE CATALOG electrocasa_dev`, sin indicar ubicación, desde el SQL Editor o un notebook. No se probó en esta ejecución.
+
+Después se corren las otras dos líneas del bloque.
 
 **3. Despliegue y setup.**
 - **Variables:** el correo de alertas y la base de Tracking se pasan como variables, para no versionarlos.
 - **El setup:** `00_setup.ipynb` crea lo que falte del paso 2, las funciones de máscara y los permisos de los tres grupos, y hace la demostración del `REVOKE`.
+- **Orden respecto del enunciado:** el enunciado pide correr `00_setup.ipynb` antes de desplegar el bundle.
+  - Aquí el setup también está declarado como job del bundle (`electrocasa_setup`), para correrlo por el CLI.
+  - El catálogo, los schemas y el volume ya existen desde el paso 2, y el setup corre antes del primer lote. Así, las máscaras y los permisos existen antes de que el pipeline procese datos.
+  - También se puede abrir el notebook en el workspace y correrlo a mano antes del despliegue, con el parámetro `catalogo`.
 
 ```bash
 export BUNDLE_VAR_correo_alertas="<correo real que recibe las alertas>"
@@ -513,6 +523,16 @@ databricks connections delete electrocasa_tracking_sqlserver
 ```
 
 `bundle destroy` exige que las variables del paso 3 estén definidas; para borrar sirve cualquier valor. Borra los jobs y los pipelines con sus tablas.
+
+**Pasos que no van en el bundle, y por qué:**
+
+| Paso | Cómo se hace | Por qué |
+|---|---|---|
+| Grupos | En la interfaz: **Settings > Identity and access > Groups** | Lo pide el enunciado: creados con la API, el CLI o el SDK quedan como grupos locales del workspace, Unity Catalog no los reconoce y el `GRANT` falla con `PRINCIPAL_DOES_NOT_EXIST` |
+| Connection a Tracking | En la interfaz o con el CLI, con la contraseña pedida por teclado (paso 1) | Guarda credenciales, y las credenciales no pueden quedar en el repositorio (antipatrón del enunciado) |
+| Catálogo | En la interfaz o con `CREATE CATALOG` en SQL (paso 2) | En esta ejecución el CLI falló con `Metastore storage root URL does not exist`. Además tiene que existir antes del despliegue, porque el pipeline y el conector apuntan a él |
+| Datos de los lotes | En la interfaz o con `databricks fs cp` (paso 4) | Son material del curso y no se versionan (`datos/` está en `.gitignore`). El enunciado pide cargarlos lote por lote para mostrar los conteos de cada uno |
+| Acceso a las tablas de sistema | No se pudo en este workspace | [Microsoft Learn](https://learn.microsoft.com/en-us/azure/databricks/admin/system-tables/): *"Users with both the account admin and metastore admin roles have access to system tables by default"* (solo quien es administrador de la cuenta y del metastore a la vez tiene acceso por defecto). El usuario del proyecto no tenía esos roles. El error y la alternativa están en la [sección 14.4](#144-gobierno) |
 
 ## 14. Evidencia de ejecución
 
