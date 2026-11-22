@@ -71,7 +71,7 @@ Cada pauta del enunciado y dónde se cumple:
 | Normalización de fechas, montos, categorías, métodos de pago, eventos, estados, couriers y ciudad | `src/electrocasa/utils/normalizacion.py` y `preparacion.py` |
 | Gold que responde las seis preguntas | `src/electrocasa/transformations/gold.py` y `utils/gold_logica.py` ([sección 8](#8-gold-una-tabla-por-pregunta)) |
 | Job con dependencias, dos tipos de tarea, validación, trigger, reintentos y alertas | `resources/electrocasa_job.yml` y `notebooks/02_validacion.ipynb` ([sección 10](#10-orquestación)) |
-| Bundle con dos targets | `databricks.yml` ([sección 11](#11-cicd-con-el-bundle)) |
+| Bundle con dos targets, desplegable desde el repositorio | `databricks.yml` y `resources/` ([sección 11](#11-cicd-con-el-bundle)); comandos para desplegarlo en otro workspace en la [sección 13](#13-despliegue-paso-a-paso) |
 | Monitoreo y justificación del compute | `notebooks/90_monitoreo.ipynb` ([sección 12](#12-monitoreo-compute-y-costos)) |
 | Grupos, `GRANT`, `REVOKE`, acceso de auditoría y masking de `dni` y `salario` | `notebooks/00_setup.ipynb` y `src/electrocasa/utils/mascaras.py` ([sección 9](#9-gobierno-y-seguridad)) |
 | Decisiones justificadas | [Sección 7](#7-decisiones-de-diseño) |
@@ -406,44 +406,113 @@ flowchart LR
 
 ## 13. Despliegue paso a paso
 
-El workspace es de tipo serverless: los catálogos usan el almacenamiento por defecto y no hay clusters que administrar.
+**Qué despliega el bundle:**
+- `databricks.yml` declara los targets `dev` y `prod` y sus variables;
+- `resources/` declara el pipeline Medallion, el conector de Tracking, el job de orquestación y los jobs de setup y monitoreo.
 
-**En la interfaz del workspace:**
+**Dónde se probó:** el 21 de noviembre de 2026, con estos mismos archivos, en un workspace serverless de Azure Databricks. El resultado está en la [sección 14](#14-evidencia-de-ejecución). No usa clusters clásicos: todo corre en serverless.
 
-1. Crear los grupos `electrocasa_ingenieria`, `electrocasa_analistas` y `electrocasa_auditoria` en **Settings > Identity and access > Groups**, y agregarse a `electrocasa_ingenieria`.
-2. Crear la Connection de Unity Catalog de tipo SQL Server `electrocasa_tracking_sqlserver` con el host, el usuario y la contraseña que comparte el docente. Si el asistente pide un catálogo foráneo, llamarlo `electrocasa_sqlserver`.
-3. Crear el catálogo `electrocasa_dev` en Catalog Explorer (**Create catalog**, almacenamiento **Default storage**). El CLI no lo crea en este caso, porque la API pide una ubicación de almacenamiento y el almacenamiento por defecto solo se elige desde la interfaz. Los schemas y el volume sí van por el CLI:
+**Requisitos:**
 
-   ```powershell
-   foreach ($s in "bronze", "silver", "gold") { databricks schemas create $s electrocasa_dev }
-   databricks volumes create electrocasa_dev default vol_landing MANAGED
-   ```
+- El CLI de Databricks, autenticado contra el workspace (por ejemplo, con `databricks auth login --host <url del workspace>`). Se usó la versión 1.27.0.
+- Los grupos `electrocasa_ingenieria`, `electrocasa_analistas` y `electrocasa_auditoria`, creados en **Settings > Identity and access > Groups**.
+  - Quien despliega tiene que ser miembro de `electrocasa_ingenieria`.
+  - El pipeline corre con sus permisos, y así las tablas derivadas de Empleados guardan los valores reales (ver sección 9).
+- La carpeta `datos/` del material del enunciado. No está en el repositorio.
+- El host, la base de datos, el usuario y la contraseña de la Azure SQL de Tracking, que comparte el docente.
 
-**Despliegue del bundle con el CLI de Databricks, desde la raíz del repositorio.** El correo de alertas y la base de Tracking se pasan como variables, para no versionarlos:
+Los comandos son de Bash: Azure Cloud Shell, Git Bash, Linux o macOS. En PowerShell, las variables se definen con `$env:NOMBRE = "valor"`.
 
-```powershell
-$env:BUNDLE_VAR_correo_alertas = "<correo>"
-$env:BUNDLE_VAR_bd_tracking    = "<base de datos de Tracking>"
+**1. Connection a Tracking (una sola vez).**
+- **Por la interfaz:** en Catalog Explorer, una Connection de tipo SQL Server llamada `electrocasa_tracking_sqlserver`.
+- **Por el CLI:** con este bloque, que pide los datos por teclado. La contraseña no se muestra ni queda en ningún archivo:
 
+```bash
+read -p "Servidor de Tracking: " SRV; read -p "Usuario: " USR; read -s -p "Contraseña: " CLAVE; echo
+SRV="$SRV" USR="$USR" CLAVE="$CLAVE" python3 -c 'import json,os; print(json.dumps({"name":"electrocasa_tracking_sqlserver","connection_type":"SQLSERVER","options":{"host":os.environ["SRV"],"port":"1433","user":os.environ["USR"],"password":os.environ["CLAVE"]}}))' > /tmp/conexion.json
+databricks connections create --json @/tmp/conexion.json > /dev/null && echo "Conexión creada"
+rm -f /tmp/conexion.json; unset CLAVE
+```
+
+**2. Catálogo, schemas y volume de landing.** Van antes del despliegue, porque el pipeline y el conector apuntan al catálogo:
+
+```bash
+databricks catalogs create electrocasa_dev
+for s in bronze silver gold; do databricks schemas create $s electrocasa_dev; done
+databricks volumes create electrocasa_dev default vol_landing MANAGED
+```
+
+Si el primer comando responde `Metastore storage root URL does not exist`, el catálogo se crea en Catalog Explorer con **Create catalog** y almacenamiento **Default storage**, y después se corren las otras dos líneas. Así pasó en el workspace serverless de esta ejecución: ahí el almacenamiento por defecto solo se elige desde la interfaz.
+
+**3. Despliegue y setup.**
+- **Variables:** el correo de alertas y la base de Tracking se pasan como variables, para no versionarlos.
+- **El setup:** `00_setup.ipynb` crea lo que falte del paso 2, las funciones de máscara y los permisos de los tres grupos, y hace la demostración del `REVOKE`.
+
+```bash
+export BUNDLE_VAR_correo_alertas="<correo real que recibe las alertas>"
+export BUNDLE_VAR_bd_tracking="<base de datos de Tracking>"
 databricks bundle validate -t dev
 databricks bundle deploy -t dev
 databricks bundle run -t dev electrocasa_setup
 ```
 
-**Procesamiento por lotes:**
+**4. Los tres lotes.**
+- **Qué se sube:** cada archivo va a la carpeta de su fuente, dentro de `/Volumes/electrocasa_dev/default/vol_landing/`.
+- **Después de cada lote:** se corre el job. En `dev` el modo desarrollo pausa el trigger por llegada de archivo, así que el job se corre a mano.
 
-1. **Lote 1:** subir a su carpeta del volume el lote 1 de ventas, empleados, devoluciones y reseñas, el catálogo del 2026-03-01 y `sucursales.csv`, desde Catalog Explorer (Upload to this volume) o con `databricks fs cp`. Después correr el job:
+| Lote | Archivos de `datos/` | Carpeta del volume |
+|---|---|---|
+| 1 | `ventas/ventas_lote_01_2026-05-31.csv` | `ventas/` |
+| 1 | `empleados/empleados_lote_01_2026-05-31.csv` | `empleados/` |
+| 1 | `devoluciones/devoluciones_lote_01_2026-05-31.csv` | `devoluciones/` |
+| 1 | `resenas/resenas_lote_01_2026-07-31.json` | `resenas/` |
+| 1 | `catalogo/catalogo_productos_2026-03-01.json` | `catalogo/` |
+| 1 | `sucursales.csv` | `sucursales/` |
+| 2 | `ventas/ventas_lote_02_2026-08-31.csv`, `empleados/empleados_lote_02_2026-08-31.csv`, `devoluciones/devoluciones_lote_02_2026-08-31.csv`, `resenas/resenas_lote_02_2026-10-31.json` y `catalogo/catalogo_productos_2026-08-01.json` | La de su fuente |
+| 3 | `ventas/ventas_lote_03_2026-10-31.csv`, `empleados/empleados_lote_03_2026-10-31.csv` y `devoluciones/devoluciones_lote_03_2026-10-31.csv` | La de su fuente |
 
-   ```powershell
-   databricks bundle run -t dev electrocasa_job
-   ```
+Se pueden subir desde Catalog Explorer (**Upload to this volume**) o con este bloque, cambiando `D` por la ruta de la carpeta `datos/`:
 
-2. **Lote 2:** los lotes 2 y el catálogo del 2026-08-01, y otra corrida del job.
-3. **Lote 3:** los lotes 3 de ventas, empleados y devoluciones, y otra corrida del job.
-4. **Cierre:**
-   - `databricks bundle run -t dev electrocasa_tracking` hace la segunda corrida del conector, que no tiene que traer filas;
-   - `databricks bundle run -t dev electrocasa_monitoreo` saca el event log, la historia del conector, los conteos por lote y los costos.
-5. **Producción:** crear `electrocasa_prod` igual que `electrocasa_dev` (catálogo en la interfaz, schemas y volume por el CLI), desplegar con `databricks bundle deploy -t prod` y correr `databricks bundle run -t prod electrocasa_setup`. En `prod` el trigger por llegada de archivo queda activo.
+```bash
+V=dbfs:/Volumes/electrocasa_dev/default/vol_landing; D=<ruta de la carpeta datos>
+subir() { for f in "$@"; do c=$(dirname "$f"); [ "$c" = "." ] && c=sucursales; databricks fs cp "$D/$f" "$V/$c/$(basename "$f")" --overwrite || return 1; done; }
+subir ventas/ventas_lote_01_2026-05-31.csv empleados/empleados_lote_01_2026-05-31.csv devoluciones/devoluciones_lote_01_2026-05-31.csv resenas/resenas_lote_01_2026-07-31.json catalogo/catalogo_productos_2026-03-01.json sucursales.csv && databricks bundle run -t dev electrocasa_job
+subir ventas/ventas_lote_02_2026-08-31.csv empleados/empleados_lote_02_2026-08-31.csv devoluciones/devoluciones_lote_02_2026-08-31.csv resenas/resenas_lote_02_2026-10-31.json catalogo/catalogo_productos_2026-08-01.json && databricks bundle run -t dev electrocasa_job
+subir ventas/ventas_lote_03_2026-10-31.csv empleados/empleados_lote_03_2026-10-31.csv devoluciones/devoluciones_lote_03_2026-10-31.csv && databricks bundle run -t dev electrocasa_job
+```
+
+**5. Cierre.**
+- `electrocasa_tracking` hace la segunda corrida del conector, que no tiene que traer filas.
+- `electrocasa_monitoreo` saca el event log, la historia del conector, los conteos por lote y las respuestas de Gold.
+
+```bash
+databricks bundle run -t dev electrocasa_tracking
+databricks bundle run -t dev electrocasa_monitoreo
+```
+
+**6. Producción.**
+- **Pasos:** se repiten los pasos 2 y 3 con `electrocasa_prod` y `-t prod`.
+- **Diferencias con dev:**
+  - el target `prod` corre en modo production;
+  - tiene `root_path` propio y permiso `CAN_MANAGE` para quien despliega;
+  - deja activo el trigger por llegada de archivo.
+
+**Resultado esperado.** Con los mismos datos, las cifras deben coincidir con la [sección 14.1](#141-conteos-después-de-cada-lote):
+- después del lote 3, `silver.ventas` tiene 17.488 filas y `silver.cuarentena` 902;
+- la segunda corrida del conector no agrega versiones a `bronze.tracking_envios`;
+- la tarea `validacion` falla si alguna tabla de Gold queda vacía, así que una corrida en verde ya confirma que Gold se llenó.
+
+**Borrar lo desplegado:**
+
+```bash
+databricks bundle destroy -t dev --auto-approve
+databricks bundle destroy -t prod --auto-approve
+databricks catalogs delete electrocasa_dev --force
+databricks catalogs delete electrocasa_prod --force
+databricks connections delete electrocasa_tracking_sqlserver
+```
+
+`bundle destroy` exige que las variables del paso 3 estén definidas; para borrar sirve cualquier valor. Borra los jobs y los pipelines con sus tablas.
 
 ## 14. Evidencia de ejecución
 
